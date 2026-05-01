@@ -13,17 +13,25 @@ import type {
 } from "@/types/gitmetro";
 import { selectBranches, type SelectedBranch } from "./branchSelection";
 import { assignCommitBranches } from "./assignCommitBranches";
+import { firstParentChain } from "./firstParentChain";
+import { extractHistoricalBranches } from "./historicalBranches";
 
 export interface NormalizeOptions {
   maxBranches: number;
   commitLimit: number;
   branchCommitLimit: number;
+  includeHistory: boolean;
+  historyLimit: number;
+  historyCommitLimit: number;
 }
 
 export const DEFAULT_NORMALIZE_OPTIONS: NormalizeOptions = {
   maxBranches: 12,
   commitLimit: 500,
   branchCommitLimit: 80,
+  includeHistory: true,
+  historyLimit: 24,
+  historyCommitLimit: 40,
 };
 
 export interface NormalizeInput {
@@ -44,6 +52,12 @@ export interface NormalizeResult {
     maxBranches: number;
     commitLimit: number;
     warnings: string[];
+    history: {
+      enabled: boolean;
+      historicalBranches: number;
+      capped: boolean;
+      source: "first-parent-merge";
+    };
   };
 }
 
@@ -65,35 +79,26 @@ function pickAvatar(name: string): string {
   return cleaned.slice(0, 2);
 }
 
-function pickDate(raw: GitHubCommitListItem): string {
-  const candidate =
-    raw.commit.author?.date ?? raw.commit.committer?.date ?? null;
+function formatDate(candidate: string | null | undefined): string {
   if (!candidate) return "";
-  // Render in space-separated form to match the existing UI style.
   const d = new Date(candidate);
   if (Number.isNaN(d.getTime())) return candidate;
   const pad = (n: number) => String(n).padStart(2, "0");
   return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())} ${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}`;
 }
 
+function pickDate(raw: GitHubCommitListItem): string {
+  return formatDate(raw.commit.author?.date ?? raw.commit.committer?.date);
+}
+
 function pickEpoch(raw: GitHubCommitListItem): number {
-  const candidate =
-    raw.commit.author?.date ?? raw.commit.committer?.date ?? null;
+  const candidate = raw.commit.author?.date ?? raw.commit.committer?.date;
   if (!candidate) return 0;
   const t = Date.parse(candidate);
   return Number.isFinite(t) ? t : 0;
 }
 
 function buildRepositorySummary(repo: GitHubRepo): RepositorySummary {
-  const lastSync = (() => {
-    const candidate = repo.pushed_at ?? repo.updated_at;
-    if (!candidate) return undefined;
-    const d = new Date(candidate);
-    if (Number.isNaN(d.getTime())) return candidate;
-    const pad = (n: number) => String(n).padStart(2, "0");
-    return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())} ${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}`;
-  })();
-
   return {
     owner: repo.owner.login,
     name: repo.name,
@@ -102,7 +107,7 @@ function buildRepositorySummary(repo: GitHubRepo): RepositorySummary {
     defaultBranch: repo.default_branch,
     stars: repo.stargazers_count,
     forks: repo.forks_count,
-    lastSync,
+    lastSync: formatDate(repo.pushed_at ?? repo.updated_at),
   };
 }
 
@@ -128,19 +133,41 @@ export function normalizeGitHubGraph(input: NormalizeInput): NormalizeResult {
     cappedCommitsByBranch[b.name] = list.slice(0, options.branchCommitLimit);
   });
 
+  // Build the raw commit pool keyed by sha.
+  const rawBySha: Record<string, GitHubCommitListItem> = {};
+  selected.forEach((b) => {
+    cappedCommitsByBranch[b.name].forEach((c) => {
+      if (!rawBySha[c.sha]) rawBySha[c.sha] = c;
+    });
+  });
+
+  const defaultBranch = selected.find((b) => b.isDefault);
+  const trunkSet =
+    options.includeHistory && defaultBranch
+      ? firstParentChain(rawBySha, defaultBranch.headSha)
+      : null;
+
   const { primaryByCommit } = assignCommitBranches({
     selected,
     commitsByBranch: cappedCommitsByBranch,
+    defaultBranchOnlyClaims: trunkSet ?? undefined,
   });
 
-  // Collect every fetched commit (deduped by sha) — but only keep ones that
-  // actually got assigned a primary branch (anything not assigned would have
-  // no lane to live on).
-  const rawBySha = new Map<string, GitHubCommitListItem>();
-  selected.forEach((b) => {
-    cappedCommitsByBranch[b.name].forEach((c) => {
-      if (!rawBySha.has(c.sha)) rawBySha.set(c.sha, c);
-    });
+  // Extract historical branches from trunk merges only when history is on.
+  const history =
+    options.includeHistory && trunkSet
+      ? extractHistoricalBranches({
+          bySha: rawBySha,
+          trunkSet,
+          primaryByCommit,
+          historyLimit: options.historyLimit,
+          historyCommitLimit: options.historyCommitLimit,
+        })
+      : { branches: [], historicalAssignment: {}, capped: false, chainCapped: false };
+
+  // Merge historical assignments into the primary map.
+  Object.entries(history.historicalAssignment).forEach(([sha, branchId]) => {
+    if (!primaryByCommit[sha]) primaryByCommit[sha] = branchId;
   });
 
   // Build tag map (sha -> tag name). Multiple tags on the same sha keep the
@@ -153,14 +180,14 @@ export function normalizeGitHubGraph(input: NormalizeInput): NormalizeResult {
   });
 
   // Build BranchLine[]. Lane 0 for default; descending negative integers for
-  // each subsequent selected branch in selection order.
+  // each subsequent ref branch in selection order. Historical branches stack
+  // after all current refs.
   const defaultThemeColors = THEMES["gitmetro-dark"];
   const headByBranchSha = new Map<string, string>();
   selected.forEach((b) => headByBranchSha.set(b.headSha, b.name));
 
-  // Lane 0 for the default branch; others stack -1, -2, … in selection order.
   let nextLane = -1;
-  const branches: BranchLine[] = selected.map((b) => ({
+  const refBranches: BranchLine[] = selected.map((b) => ({
     id: b.name,
     name: b.name,
     category: b.category,
@@ -169,10 +196,18 @@ export function normalizeGitHubGraph(input: NormalizeInput): NormalizeResult {
     headSha: b.headSha,
     isDefault: b.isDefault,
     isActive: true,
+    source: "ref" as const,
   }));
 
+  const historicalBranches: BranchLine[] = history.branches.map((b) => ({
+    ...b,
+    lane: nextLane--,
+  }));
+
+  const branches: BranchLine[] = [...refBranches, ...historicalBranches];
+
   // Sort included commits by date ascending; sha tie-break for stability.
-  const includedCommits = Array.from(rawBySha.values())
+  const includedRaw = Object.values(rawBySha)
     .filter((c) => primaryByCommit[c.sha])
     .sort((a, b) => {
       const ea = pickEpoch(a);
@@ -184,9 +219,9 @@ export function normalizeGitHubGraph(input: NormalizeInput): NormalizeResult {
   // Detect parents that are out of order (parent t > child t) — record but
   // don't reorder; layout will still draw a line, just possibly going right→left.
   const tBySha = new Map<string, number>();
-  includedCommits.forEach((c, idx) => tBySha.set(c.sha, idx));
+  includedRaw.forEach((c, idx) => tBySha.set(c.sha, idx));
 
-  const commits: CommitNode[] = includedCommits.map((raw, idx) => {
+  const commits: CommitNode[] = includedRaw.map((raw, idx) => {
     const branchId = primaryByCommit[raw.sha];
     const author = pickAuthorName(raw);
     return {
@@ -227,12 +262,19 @@ export function normalizeGitHubGraph(input: NormalizeInput): NormalizeResult {
     );
   }
 
-  const totalRawCommits = selected.reduce(
-    (sum, b) => sum + (cappedCommitsByBranch[b.name]?.length ?? 0),
-    0,
-  );
+  if (history.capped) {
+    warnings.push(
+      `Showing ${history.branches.length} historical merge branches (capped by historyLimit)`,
+    );
+  }
+  if (history.chainCapped) {
+    warnings.push(
+      `Some historical branch chains hit historyCommitLimit and were truncated`,
+    );
+  }
+
+  const totalRawCommits = Object.keys(rawBySha).length;
   if (commits.length > options.commitLimit) {
-    // Truncate by t order if we somehow exceeded the total cap.
     commits.length = options.commitLimit;
     warnings.push(
       `Capped to ${options.commitLimit} commits (totalCommitLimit reached)`,
@@ -262,6 +304,12 @@ export function normalizeGitHubGraph(input: NormalizeInput): NormalizeResult {
       maxBranches: options.maxBranches,
       commitLimit: options.commitLimit,
       warnings,
+      history: {
+        enabled: options.includeHistory,
+        historicalBranches: history.branches.length,
+        capped: history.capped,
+        source: "first-parent-merge",
+      },
     },
   };
 }

@@ -26,6 +26,8 @@ export interface RepositorySummary {
   lastSync?: string;
 }
 
+export type BranchSource = "ref" | "merge-history" | "pull-request";
+
 export interface BranchLine {
   id: string;
   name: string;
@@ -35,6 +37,11 @@ export interface BranchLine {
   headSha?: string;
   isDefault?: boolean;
   isActive?: boolean;
+  isHistorical?: boolean;
+  source?: BranchSource;
+  mergedIntoSha?: string;
+  sourceSha?: string;
+  pullNumber?: number;
 }
 
 export interface CommitNode {

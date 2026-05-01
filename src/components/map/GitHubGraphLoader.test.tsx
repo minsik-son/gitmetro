@@ -52,6 +52,12 @@ const successBody: GraphApiSuccess = {
     maxBranches: 12,
     commitLimit: 500,
     warnings: [],
+    history: {
+      enabled: true,
+      historicalBranches: 0,
+      capped: false,
+      source: "first-parent-merge",
+    },
   },
 };
 

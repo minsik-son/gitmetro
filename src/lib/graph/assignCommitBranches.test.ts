@@ -66,4 +66,29 @@ describe("assignCommitBranches", () => {
       z: "featureB",
     });
   });
+
+  it("restricts default branch to defaultBranchOnlyClaims when provided", () => {
+    // main sees [a, b, c, d]. Trunk set is only {a, c}. main should only claim those.
+    const result = assignCommitBranches({
+      selected: [selected("main", true)],
+      commitsByBranch: {
+        main: [fakeCommit("a"), fakeCommit("b"), fakeCommit("c"), fakeCommit("d")],
+      },
+      defaultBranchOnlyClaims: new Set(["a", "c"]),
+    });
+    expect(result.primaryByCommit).toEqual({ a: "main", c: "main" });
+  });
+
+  it("lets non-default branches claim commits the restricted default did not take", () => {
+    // main sees [a, b], trunk = {a}. feature sees [b]. feature should claim b.
+    const result = assignCommitBranches({
+      selected: [selected("main", true), selected("feature")],
+      commitsByBranch: {
+        main: [fakeCommit("a"), fakeCommit("b")],
+        feature: [fakeCommit("b")],
+      },
+      defaultBranchOnlyClaims: new Set(["a"]),
+    });
+    expect(result.primaryByCommit).toEqual({ a: "main", b: "feature" });
+  });
 });

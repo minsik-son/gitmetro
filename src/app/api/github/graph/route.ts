@@ -25,6 +25,8 @@ const CLAMP = {
   maxBranches: { min: 1, max: 30 },
   branchCommitLimit: { min: 10, max: 200 },
   commitLimit: { min: 50, max: 1000 },
+  historyLimit: { min: 0, max: 50 },
+  historyCommitLimit: { min: 5, max: 100 },
 };
 
 function clamp(value: number, min: number, max: number): number {
@@ -42,6 +44,14 @@ function readNumber(
   const n = Number(raw);
   if (!Number.isFinite(n)) return fallback;
   return clamp(Math.floor(n), range.min, range.max);
+}
+
+function readBoolean(url: URL, key: string, fallback: boolean): boolean {
+  const raw = url.searchParams.get(key);
+  if (raw == null) return fallback;
+  if (raw === "false" || raw === "0" || raw === "off") return false;
+  if (raw === "true" || raw === "1" || raw === "on") return true;
+  return fallback;
 }
 
 function failureResponse(failure: GraphApiFailure, status?: number) {
@@ -86,6 +96,23 @@ export async function GET(req: Request) {
       "commitLimit",
       DEFAULT_NORMALIZE_OPTIONS.commitLimit,
       CLAMP.commitLimit,
+    ),
+    includeHistory: readBoolean(
+      url,
+      "includeHistory",
+      DEFAULT_NORMALIZE_OPTIONS.includeHistory,
+    ),
+    historyLimit: readNumber(
+      url,
+      "historyLimit",
+      DEFAULT_NORMALIZE_OPTIONS.historyLimit,
+      CLAMP.historyLimit,
+    ),
+    historyCommitLimit: readNumber(
+      url,
+      "historyCommitLimit",
+      DEFAULT_NORMALIZE_OPTIONS.historyCommitLimit,
+      CLAMP.historyCommitLimit,
     ),
   };
 
@@ -174,6 +201,7 @@ export async function GET(req: Request) {
         maxBranches: options.maxBranches,
         commitLimit: options.commitLimit,
         warnings,
+        history: normalize.meta.history,
         rateLimit: lastRateLimit,
       },
     };

@@ -5,6 +5,13 @@ export interface AssignmentInput {
   selected: SelectedBranch[];
   /** Newest-first list of commits per selected branch name (as GitHub returns). */
   commitsByBranch: Record<string, GitHubCommitListItem[]>;
+  /**
+   * If provided, the default branch only claims commits whose sha is in this
+   * set (typically the first-parent trunk). Commits the default branch sees
+   * but that aren't in the set stay unassigned, so historical-branch
+   * extraction can pick them up.
+   */
+  defaultBranchOnlyClaims?: Set<string>;
 }
 
 export interface AssignmentResult {
@@ -32,10 +39,11 @@ export function assignCommitBranches(input: AssignmentInput): AssignmentResult {
   const defaultBranch = input.selected.find((b) => b.isDefault);
   if (defaultBranch) {
     const defaultCommits = input.commitsByBranch[defaultBranch.name] ?? [];
+    const restrict = input.defaultBranchOnlyClaims;
     defaultCommits.forEach((c) => {
-      if (!primaryByCommit[c.sha]) {
-        primaryByCommit[c.sha] = defaultBranch.name;
-      }
+      if (primaryByCommit[c.sha]) return;
+      if (restrict && !restrict.has(c.sha)) return;
+      primaryByCommit[c.sha] = defaultBranch.name;
     });
   }
 

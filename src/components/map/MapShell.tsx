@@ -61,10 +61,22 @@ export function MapShell({
   const [visibleBranches, setVisibleBranches] = useState<Set<string>>(
     () => new Set(graph.branches.map((b) => b.id)),
   );
+  const [showHistory, setShowHistory] = useState(true);
   const [selectedSha, setSelectedSha] = useState<string | null>(null);
   const [hover, setHover] = useState<HoverState | null>(null);
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
+
+  const effectiveVisibleBranches = useMemo(() => {
+    if (showHistory) return visibleBranches;
+    const next = new Set<string>();
+    visibleBranches.forEach((id) => {
+      const branch = themedGraph.branches.find((b) => b.id === id);
+      if (branch?.isHistorical) return;
+      next.add(id);
+    });
+    return next;
+  }, [visibleBranches, showHistory, themedGraph.branches]);
 
   function toggleBranch(id: string) {
     setVisibleBranches((prev) => {
@@ -108,6 +120,8 @@ export function MapShell({
           branches={themedGraph.branches}
           visible={visibleBranches}
           toggle={toggleBranch}
+          showHistory={showHistory}
+          setShowHistory={setShowHistory}
         />
         <div className="relative min-w-0 flex-1">
           <MetroMapCanvas
@@ -115,7 +129,7 @@ export function MapShell({
             orientation={orientation}
             nodeStyle={nodeStyle}
             theme={theme}
-            visibleBranches={visibleBranches}
+            visibleBranches={effectiveVisibleBranches}
             selectedSha={selectedSha}
             onSelectCommit={handleSelect}
             onHoverChange={setHover}

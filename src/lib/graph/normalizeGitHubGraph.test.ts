@@ -212,4 +212,124 @@ describe("normalizeGitHubGraph (small synthetic fixture)", () => {
   it("populates branchesTotal from the raw branch list count", () => {
     expect(result.graph.repo.branchesTotal).toBe(branches.length);
   });
+
+  it("includes history meta with enabled=true by default", () => {
+    expect(result.meta.history.enabled).toBe(true);
+    expect(result.meta.history.source).toBe("first-parent-merge");
+  });
+});
+
+describe("normalizeGitHubGraph history extraction", () => {
+  // Build a small repo where main = A -> B -> M(merge: B + S2)
+  // and a side chain S1 -> S2 (off A).
+  const repo: GitHubRepo = {
+    owner: { login: "x" },
+    name: "y",
+    full_name: "x/y",
+    description: null,
+    default_branch: "main",
+    stargazers_count: 0,
+    forks_count: 0,
+    pushed_at: null,
+    updated_at: null,
+    private: false,
+    html_url: "",
+  };
+  const branches: GitHubBranchListItem[] = [
+    { name: "main", commit: { sha: "M" } },
+  ];
+  const c = (
+    sha: string,
+    date: string,
+    parents: string[] = [],
+    message = sha,
+  ): GitHubCommitListItem => ({
+    sha,
+    parents: parents.map((p) => ({ sha: p })),
+    commit: {
+      message,
+      author: { name: "x", date },
+      committer: { name: "x", date },
+    },
+    author: { login: "x" },
+    html_url: "",
+  });
+  const commitsByBranch: Record<string, GitHubCommitListItem[]> = {
+    main: [
+      c("M", "2026-01-04T00:00:00Z", ["B", "S2"], "Merge pull request #99 from a/feature/wallet"),
+      c("B", "2026-01-02T00:00:00Z", ["A"]),
+      c("A", "2026-01-01T00:00:00Z", []),
+      c("S2", "2026-01-03T00:00:00Z", ["S1"]),
+      c("S1", "2026-01-02T12:00:00Z", ["A"]),
+    ],
+  };
+
+  it("extracts a historical branch when includeHistory is on", () => {
+    const out = normalizeGitHubGraph({
+      repo,
+      branches,
+      commitsByBranch,
+      tags: [],
+    });
+    const historical = out.graph.branches.filter((b) => b.isHistorical);
+    expect(historical).toHaveLength(1);
+    expect(historical[0].mergedIntoSha).toBe("M");
+    expect(historical[0].name).toBe("feature/wallet");
+    expect(historical[0].pullNumber).toBe(99);
+    expect(out.meta.history.enabled).toBe(true);
+    expect(out.meta.history.historicalBranches).toBe(1);
+  });
+
+  it("places the historical branch on a lane below the trunk", () => {
+    const out = normalizeGitHubGraph({
+      repo,
+      branches,
+      commitsByBranch,
+      tags: [],
+    });
+    const historical = out.graph.branches.find((b) => b.isHistorical);
+    expect(historical?.lane).toBeLessThan(0);
+  });
+
+  it("assigns historical chain commits to the historical branch", () => {
+    const out = normalizeGitHubGraph({
+      repo,
+      branches,
+      commitsByBranch,
+      tags: [],
+    });
+    const historical = out.graph.branches.find((b) => b.isHistorical);
+    const s2 = out.graph.commits.find((c) => c.sha === "S2");
+    const s1 = out.graph.commits.find((c) => c.sha === "S1");
+    expect(s2?.branch).toBe(historical?.id);
+    expect(s1?.branch).toBe(historical?.id);
+  });
+
+  it("keeps trunk merge commit on default branch", () => {
+    const out = normalizeGitHubGraph({
+      repo,
+      branches,
+      commitsByBranch,
+      tags: [],
+    });
+    const m = out.graph.commits.find((c) => c.sha === "M");
+    expect(m?.branch).toBe("main");
+  });
+
+  it("does not extract historical branches when includeHistory is false", () => {
+    const out = normalizeGitHubGraph({
+      repo,
+      branches,
+      commitsByBranch,
+      tags: [],
+      options: { includeHistory: false },
+    });
+    expect(out.graph.branches.every((b) => !b.isHistorical)).toBe(true);
+    expect(out.meta.history.enabled).toBe(false);
+    expect(out.meta.history.historicalBranches).toBe(0);
+    // With history off, default branch should claim the side commits too
+    // (they were reachable from main).
+    const s2 = out.graph.commits.find((c) => c.sha === "S2");
+    expect(s2?.branch).toBe("main");
+  });
 });

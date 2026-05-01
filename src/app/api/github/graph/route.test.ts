@@ -159,4 +159,36 @@ describe("GET /api/github/graph", () => {
     expect(body.ok).toBe(false);
     if (!body.ok) expect(body.error.code).toBe("empty_graph");
   });
+
+  it("returns history meta with enabled=true by default", async () => {
+    const repo = makeRepo();
+    mockFetch
+      .mockResolvedValueOnce(jsonResponse(repo))
+      .mockResolvedValueOnce(jsonResponse([makeBranch("main", "m1")]))
+      .mockResolvedValueOnce(jsonResponse([makeCommit("m1", "2026-04-01T00:00:00Z")]))
+      .mockResolvedValueOnce(jsonResponse([]));
+    const res = await GET(reqUrl("owner=x&repo=y"));
+    const body = (await res.json()) as GraphApiResponse;
+    expect(body.ok).toBe(true);
+    if (body.ok) {
+      expect(body.meta.history.enabled).toBe(true);
+      expect(body.meta.history.source).toBe("first-parent-merge");
+    }
+  });
+
+  it("disables history when includeHistory=false in the query", async () => {
+    const repo = makeRepo();
+    mockFetch
+      .mockResolvedValueOnce(jsonResponse(repo))
+      .mockResolvedValueOnce(jsonResponse([makeBranch("main", "m1")]))
+      .mockResolvedValueOnce(jsonResponse([makeCommit("m1", "2026-04-01T00:00:00Z")]))
+      .mockResolvedValueOnce(jsonResponse([]));
+    const res = await GET(reqUrl("owner=x&repo=y&includeHistory=false"));
+    const body = (await res.json()) as GraphApiResponse;
+    expect(body.ok).toBe(true);
+    if (body.ok) {
+      expect(body.meta.history.enabled).toBe(false);
+      expect(body.meta.history.historicalBranches).toBe(0);
+    }
+  });
 });

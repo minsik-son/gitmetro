@@ -11,6 +11,12 @@ export interface GraphMeta {
   maxBranches: number;
   commitLimit: number;
   warnings: string[];
+  history: {
+    enabled: boolean;
+    historicalBranches: number;
+    capped: boolean;
+    source: "first-parent-merge";
+  };
   rateLimit?: {
     limit?: number;
     remaining?: number;

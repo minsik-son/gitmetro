@@ -8,6 +8,8 @@ interface Props {
   branches: BranchLine[];
   visible: Set<string>;
   toggle: (id: string) => void;
+  showHistory: boolean;
+  setShowHistory: (next: boolean) => void;
 }
 
 const CATEGORY_ORDER: BranchCategory[] = [
@@ -28,10 +30,49 @@ const CATEGORY_LABEL: Record<BranchCategory, string> = {
   other: "Other",
 };
 
-export function BranchFilterPanel({ branches, visible, toggle }: Props) {
+interface BranchRowProps {
+  branch: BranchLine;
+  on: boolean;
+  onToggle: () => void;
+  badge?: string;
+}
+
+function BranchRow({ branch, on, onToggle, badge }: BranchRowProps) {
+  return (
+    <button
+      type="button"
+      onClick={onToggle}
+      className={`flex w-full items-center gap-2 rounded px-2 py-1 text-left text-xs transition ${
+        on ? "text-text hover:bg-panel-alt" : "text-muted opacity-60 hover:opacity-100"
+      }`}
+    >
+      <span
+        className="inline-block h-2 w-2 rounded-full"
+        style={{ background: branch.color }}
+      />
+      <span className="flex-1 truncate font-mono">{branch.name}</span>
+      {badge && (
+        <span className="rounded bg-panel-alt px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-wider text-muted">
+          {badge}
+        </span>
+      )}
+      <span className={on ? "text-text" : "text-muted"}>
+        {on ? <EyeIcon /> : <EyeOffIcon />}
+      </span>
+    </button>
+  );
+}
+
+export function BranchFilterPanel({
+  branches,
+  visible,
+  toggle,
+  showHistory,
+  setShowHistory,
+}: Props) {
   const [filter, setFilter] = useState("");
 
-  const grouped = useMemo(() => {
+  const { grouped, historical } = useMemo(() => {
     const g: Record<BranchCategory, BranchLine[]> = {
       main: [],
       develop: [],
@@ -40,10 +81,17 @@ export function BranchFilterPanel({ branches, visible, toggle }: Props) {
       release: [],
       other: [],
     };
+    const h: BranchLine[] = [];
     branches
       .filter((b) => b.name.toLowerCase().includes(filter.toLowerCase()))
-      .forEach((b) => g[b.category].push(b));
-    return g;
+      .forEach((b) => {
+        if (b.isHistorical) {
+          h.push(b);
+        } else {
+          g[b.category].push(b);
+        }
+      });
+    return { grouped: g, historical: h };
   }, [branches, filter]);
 
   return (
@@ -73,34 +121,54 @@ export function BranchFilterPanel({ branches, visible, toggle }: Props) {
               <span>{list.length}</span>
             </div>
             <div className="flex flex-col gap-0.5">
-              {list.map((b) => {
-                const on = visible.has(b.id);
-                return (
-                  <button
-                    key={b.id}
-                    type="button"
-                    onClick={() => toggle(b.id)}
-                    className={`flex w-full items-center gap-2 rounded px-2 py-1 text-left text-xs transition ${
-                      on
-                        ? "text-text hover:bg-panel-alt"
-                        : "text-muted opacity-60 hover:opacity-100"
-                    }`}
-                  >
-                    <span
-                      className="inline-block h-2 w-2 rounded-full"
-                      style={{ background: b.color }}
-                    />
-                    <span className="flex-1 truncate font-mono">{b.name}</span>
-                    <span className={on ? "text-text" : "text-muted"}>
-                      {on ? <EyeIcon /> : <EyeOffIcon />}
-                    </span>
-                  </button>
-                );
-              })}
+              {list.map((b) => (
+                <BranchRow
+                  key={b.id}
+                  branch={b}
+                  on={visible.has(b.id)}
+                  onToggle={() => toggle(b.id)}
+                />
+              ))}
             </div>
           </div>
         );
       })}
+
+      {historical.length > 0 && (
+        <div>
+          <div className="mb-1.5 flex items-center justify-between text-[11px] uppercase tracking-wider text-muted">
+            <span>History</span>
+            <span>{historical.length}</span>
+          </div>
+          <div className={`flex flex-col gap-0.5 ${showHistory ? "" : "opacity-40"}`}>
+            {historical.map((b) => (
+              <BranchRow
+                key={b.id}
+                branch={b}
+                on={visible.has(b.id) && showHistory}
+                onToggle={() => toggle(b.id)}
+                badge={b.pullNumber ? `PR #${b.pullNumber}` : "history"}
+              />
+            ))}
+          </div>
+        </div>
+      )}
+
+      <div>
+        <div className="mb-2 text-[11px] uppercase tracking-wider text-muted">
+          Display
+        </div>
+        <label className="flex cursor-pointer items-center gap-2 px-2 py-1 text-xs text-text">
+          <input
+            type="checkbox"
+            data-testid="show-history-toggle"
+            checked={showHistory}
+            onChange={(e) => setShowHistory(e.target.checked)}
+            className="h-3.5 w-3.5 accent-[#ff5b5b]"
+          />
+          <span>Show branch history</span>
+        </label>
+      </div>
 
       <div>
         <div className="mb-2 text-[11px] uppercase tracking-wider text-muted">
