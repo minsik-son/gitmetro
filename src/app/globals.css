@@ -1,0 +1,33 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap");
+
+:root {
+  --app: #0b0d10;
+  --panel: #11141a;
+  --panel-alt: #161a21;
+  --border: #222732;
+  --canvas: #0a0c10;
+  --guide: #252b36;
+  --text: #e6e8ec;
+  --muted: #8a92a3;
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; height: 100%; }
+body {
+  font-family: Inter, system-ui, sans-serif;
+  background: var(--app);
+  color: var(--text);
+  -webkit-font-smoothing: antialiased;
+  font-feature-settings: "ss01", "cv11";
+}
+code { font-family: "JetBrains Mono", ui-monospace, monospace; }
+
+.gm-canvas-grid {
+  background-color: var(--canvas);
+  background-image: radial-gradient(circle at 1px 1px, var(--guide) 1px, transparent 0);
+  background-size: 40px 40px;
+}
