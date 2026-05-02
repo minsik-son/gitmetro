@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { applyThemeToGraph } from "@/lib/graph/applyTheme";
 import { THEMES } from "@/lib/theme/themes";
 import { getVisualNodeId } from "@/lib/graph/visualNode";
+import { buildDefaultVisibleBranches } from "@/lib/graph/defaultVisibleBranches";
 import type {
   CommitNode,
   GitMetroGraph,
@@ -63,7 +64,7 @@ export function MapShell({
   );
 
   const [visibleBranches, setVisibleBranches] = useState<Set<string>>(
-    () => new Set(graph.branches.map((b) => b.id)),
+    () => buildDefaultVisibleBranches(graph),
   );
   const [showHistory, setShowHistory] = useState(true);
   const [showPrHistory, setShowPrHistory] = useState(true);

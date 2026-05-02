@@ -10,12 +10,19 @@ import {
   type WheelEvent,
 } from "react";
 import type {
+  BranchLine,
   CommitNode,
   GitMetroGraph,
   GraphEdge,
   MapOrientation,
 } from "@/types/gitmetro";
-import { buildLayout, rectPath } from "@/lib/layout/buildLayout";
+import {
+  buildMetroRouteLayout,
+  fitBoundsToViewport,
+  type RoutedStation,
+} from "@/lib/layout/buildMetroRouteLayout";
+import { rectPath } from "@/lib/layout/buildLayout";
+import { clampZoom, zoomAtPoint } from "@/lib/layout/viewportTransform";
 import { getVisualNodeId } from "@/lib/graph/visualNode";
 import type { ThemeTokens } from "@/lib/theme/themes";
 import { Station, type NodeStyle } from "./Station";
@@ -43,6 +50,9 @@ interface Props {
 }
 
 const CLICK_DRAG_THRESHOLD_PX = 5;
+const MIN_ZOOM = 0.25;
+const MAX_ZOOM = 2;
+const FIT_PADDING_PX = 56;
 
 interface SyntheticEdgeStyle {
   dashArray?: string;
@@ -56,25 +66,7 @@ const SYNTHETIC_EDGE_STYLES: Record<string, SyntheticEdgeStyle> = {
     opacity: 0.65,
     testIdPrefix: "synthetic-edge",
   },
-  "pr-branch-off": {
-    dashArray: "5 4",
-    opacity: 0.55,
-    testIdPrefix: "pr-branch-off-edge",
-  },
-  "pr-merge-back": {
-    dashArray: "5 4",
-    opacity: 0.65,
-    testIdPrefix: "pr-merge-back-edge",
-  },
-  "pr-chain": {
-    opacity: 0.9,
-    testIdPrefix: "pr-chain-edge",
-  },
 };
-
-function visualT(c: CommitNode): number {
-  return c.displayT ?? c.t;
-}
 
 export function MetroMapCanvas({
   data,
@@ -91,61 +83,60 @@ export function MetroMapCanvas({
   setPan,
   onClearSelection,
 }: Props) {
-  const { branches, commits } = data;
-  const layout = useMemo(
-    () => buildLayout(branches, commits, orientation),
-    [branches, commits, orientation],
+  const routeLayout = useMemo(
+    () =>
+      buildMetroRouteLayout(data, {
+        orientation,
+        visibleBranches,
+        preferPrFocus: true,
+      }),
+    [data, orientation, visibleBranches],
   );
+
   const branchById = useMemo(() => {
-    const m: Record<string, (typeof branches)[number]> = {};
-    branches.forEach((b) => {
+    const m: Record<string, BranchLine> = {};
+    data.branches.forEach((b) => {
       m[b.id] = b;
     });
     return m;
-  }, [branches]);
-
-  const branchChains = useMemo(() => {
-    const chains: Record<string, CommitNode[]> = {};
-    branches.forEach((b) => {
-      chains[b.id] = commits
-        .filter((c) => c.branch === b.id)
-        .sort((a, b) => visualT(a) - visualT(b));
-    });
-    return chains;
-  }, [branches, commits]);
-
-  const resolveNode = useCallback(
-    (key: string): CommitNode | undefined =>
-      layout.byNodeId[key] ?? layout.bySha[key],
-    [layout],
-  );
+  }, [data.branches]);
 
   const parentEdges = useMemo(() => {
-    const e: Array<{
+    type ParentEdge = {
       id: string;
-      from: CommitNode;
-      to: CommitNode;
+      from: RoutedStation;
+      to: RoutedStation;
       color: string;
-    }> = [];
-    commits.forEach((c) => {
-      // Visual-only nodes (PR commits, virtual start/end) carry explicit
-      // GraphEdges in data.edges, so skip parent-based edge generation here.
+    };
+    const e: ParentEdge[] = [];
+    data.commits.forEach((c) => {
+      // Visual-only nodes (PR commits, virtual start/end) are wired by route paths.
       if (c.nodeId) return;
+      const childKey = getVisualNodeId(c);
+      const childStation = routeLayout.byKey[childKey];
+      if (!childStation) return;
       c.parents.forEach((psha) => {
-        const p = resolveNode(psha);
-        if (!p) return;
-        if (p.branch === c.branch && !c.isMerge) return;
-        if (c.isMerge && p.branch === c.branch) return;
+        const parentStation =
+          routeLayout.byKey[psha] ?? routeLayout.byKey[psha];
+        if (!parentStation) return;
+        if (parentStation.branchId === childStation.branchId && !c.isMerge) {
+          return;
+        }
+        if (c.isMerge && parentStation.branchId === childStation.branchId) {
+          return;
+        }
         e.push({
           id: `${psha}->${c.sha}`,
-          from: p,
-          to: c,
-          color: branchById[p.branch]?.color ?? theme.text,
+          from: parentStation,
+          to: childStation,
+          color:
+            routeLayout.routeColorByBranchId[parentStation.branchId] ??
+            theme.text,
         });
       });
     });
     return e;
-  }, [commits, resolveNode, branchById, theme.text]);
+  }, [data.commits, routeLayout, theme.text]);
 
   const syntheticEdges = useMemo(() => {
     const list: GraphEdge[] = data.edges ?? [];
@@ -153,11 +144,12 @@ export function MetroMapCanvas({
       .map((edge) => {
         const style = SYNTHETIC_EDGE_STYLES[edge.type];
         if (!style) return null;
-        const from = resolveNode(edge.from);
-        const to = resolveNode(edge.to);
+        const from = routeLayout.byKey[edge.from];
+        const to = routeLayout.byKey[edge.to];
         if (!from || !to) return null;
-        const branch = edge.branchId ? branchById[edge.branchId] : undefined;
-        const color = branch?.color ?? edge.color ?? theme.text;
+        const color = edge.branchId
+          ? routeLayout.routeColorByBranchId[edge.branchId] ?? theme.text
+          : edge.color ?? theme.text;
         return {
           id: edge.id,
           type: edge.type,
@@ -174,14 +166,14 @@ export function MetroMapCanvas({
         ): v is {
           id: string;
           type: GraphEdge["type"];
-          from: CommitNode;
-          to: CommitNode;
+          from: RoutedStation;
+          to: RoutedStation;
           color: string;
           branchId: string | undefined;
           style: SyntheticEdgeStyle;
         } => v !== null,
       );
-  }, [data.edges, resolveNode, branchById, theme.text]);
+  }, [data.edges, routeLayout, theme.text]);
 
   const drag = useRef<{
     x: number;
@@ -192,6 +184,18 @@ export function MetroMapCanvas({
   } | null>(null);
   const [isDragging, setIsDragging] = useState(false);
   const movedDuringPress = useRef(false);
+  const hasUserNavigatedRef = useRef(false);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const zoomRef = useRef(zoom);
+  const panRef = useRef(pan);
+
+  useEffect(() => {
+    zoomRef.current = zoom;
+  }, [zoom]);
+
+  useEffect(() => {
+    panRef.current = pan;
+  }, [pan]);
 
   const onMouseDown = (e: MouseEvent<SVGSVGElement>) => {
     drag.current = {
@@ -213,11 +217,14 @@ export function MetroMapCanvas({
       if (Math.abs(dx) > CLICK_DRAG_THRESHOLD_PX || Math.abs(dy) > CLICK_DRAG_THRESHOLD_PX) {
         drag.current.moved = true;
         movedDuringPress.current = true;
+        hasUserNavigatedRef.current = true;
       }
-      setPan({
+      const nextPan = {
         x: drag.current.panX + dx,
         y: drag.current.panY + dy,
-      });
+      };
+      panRef.current = nextPan;
+      setPan(nextPan);
     };
     const onUp = () => {
       drag.current = null;
@@ -231,13 +238,36 @@ export function MetroMapCanvas({
     };
   }, [setPan]);
 
+  // Auto-fit on initial layout / orientation change while user has not navigated.
+  useEffect(() => {
+    hasUserNavigatedRef.current = false;
+  }, [orientation, data]);
+
+  useEffect(() => {
+    if (hasUserNavigatedRef.current) return;
+    const el = containerRef.current;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    if (rect.width < 50 || rect.height < 50) return;
+    const fit = fitBoundsToViewport({
+      bounds: routeLayout.focusBounds,
+      viewportWidth: rect.width,
+      viewportHeight: rect.height,
+      padding: FIT_PADDING_PX,
+      minZoom: MIN_ZOOM,
+      maxZoom: MAX_ZOOM,
+    });
+    zoomRef.current = fit.zoom;
+    panRef.current = fit.pan;
+    setZoom(() => fit.zoom);
+    setPan(fit.pan);
+  }, [routeLayout, setZoom, setPan]);
+
   const onSvgClick = () => {
     if (movedDuringPress.current) {
-      // Mouseup ended a drag — don't treat as background click.
       movedDuringPress.current = false;
       return;
     }
-    // Station onClick stops propagation, so reaching here means empty area.
     onHoverChange(null);
     onClearSelection();
   };
@@ -245,34 +275,37 @@ export function MetroMapCanvas({
   const onWheel = (e: WheelEvent<HTMLDivElement>) => {
     if (!e.ctrlKey && !e.metaKey) return;
     e.preventDefault();
+    const el = containerRef.current;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    const anchor = {
+      x: e.clientX - rect.left,
+      y: e.clientY - rect.top,
+    };
+
     const delta = -e.deltaY * 0.0015;
-    setZoom((z) => Math.max(0.5, Math.min(2, z + delta)));
+    const oldZoom = zoomRef.current;
+    const oldPan = panRef.current;
+    const nextZoom = clampZoom(oldZoom + delta, MIN_ZOOM, MAX_ZOOM);
+    if (nextZoom === oldZoom) return;
+    const nextPan = zoomAtPoint({
+      oldZoom,
+      nextZoom,
+      pan: oldPan,
+      anchor,
+    });
+
+    hasUserNavigatedRef.current = true;
+    zoomRef.current = nextZoom;
+    panRef.current = nextPan;
+    setZoom(() => nextZoom);
+    setPan(nextPan);
   };
 
   const showCommit = useCallback(
     (c: CommitNode) => visibleBranches.has(c.branch),
     [visibleBranches],
   );
-
-  function chainPath(chain: CommitNode[]): string {
-    if (chain.length < 2) return "";
-    const pts = chain.map((c) =>
-      layout.posForCommit(c, branchById[c.branch].lane),
-    );
-    let d = `M ${pts[0].x} ${pts[0].y}`;
-    for (let i = 1; i < pts.length; i++) {
-      d += ` L ${pts[i].x} ${pts[i].y}`;
-    }
-    return d;
-  }
-
-  const laneLabels = branches.map((b) => {
-    const tStart = branchChains[b.id][0] ? visualT(branchChains[b.id][0]) : 0;
-    const p = layout.pos(orientation === "horizontal" ? 0 : tStart, b.lane);
-    return orientation === "horizontal"
-      ? { ...b, lx: 16, ly: p.y }
-      : { ...b, lx: p.x, ly: 16 };
-  });
 
   const handleHover = (commit: CommitNode) => (e: MouseEvent<SVGGElement>) => {
     const svg = (e.currentTarget as SVGGElement).ownerSVGElement;
@@ -287,6 +320,7 @@ export function MetroMapCanvas({
 
   return (
     <div
+      ref={containerRef}
       className="relative h-full w-full overflow-hidden gm-canvas-grid"
       data-testid="metro-canvas"
       onWheel={onWheel}
@@ -303,19 +337,26 @@ export function MetroMapCanvas({
         }}
       >
         <g transform={`translate(${pan.x},${pan.y}) scale(${zoom})`}>
-          {branches.map((b) => {
+          {/* Lane guide lines (subtle) for visible non-default lanes. */}
+          {data.branches.map((b) => {
             if (!visibleBranches.has(b.id)) return null;
-            const chain = branchChains[b.id];
-            if (!chain.length) return null;
-            const first = chain[0];
-            const a = layout.posForCommit(first, b.lane);
+            const lane = routeLayout.visualLaneByBranchId[b.id];
+            if (lane == null || lane === 0) return null;
+            const start =
+              orientation === "horizontal"
+                ? { x: 40, y: 92 + lane * 86 }
+                : { x: 150 + lane * 86, y: 40 };
+            const end =
+              orientation === "horizontal"
+                ? { x: routeLayout.width - 40, y: start.y }
+                : { x: start.x, y: routeLayout.height - 40 };
             return (
               <line
                 key={`guide-${b.id}`}
-                x1={a.x}
-                y1={a.y}
-                x2={orientation === "horizontal" ? layout.width - 40 : a.x}
-                y2={orientation === "horizontal" ? a.y : layout.height - 40}
+                x1={start.x}
+                y1={start.y}
+                x2={end.x}
+                y2={end.y}
                 stroke={theme.guide}
                 strokeDasharray="2 6"
                 strokeWidth={1}
@@ -323,21 +364,10 @@ export function MetroMapCanvas({
             );
           })}
 
+          {/* Cross-branch parent edges (real commit topology). */}
           {parentEdges.map((ed) => {
-            if (
-              !visibleBranches.has(ed.from.branch) ||
-              !visibleBranches.has(ed.to.branch)
-            ) {
-              return null;
-            }
-            const p1 = layout.posForCommit(
-              ed.from,
-              branchById[ed.from.branch].lane,
-            );
-            const p2 = layout.posForCommit(
-              ed.to,
-              branchById[ed.to.branch].lane,
-            );
+            const p1 = { x: ed.from.x, y: ed.from.y };
+            const p2 = { x: ed.to.x, y: ed.to.y };
             const d = rectPath(p1, p2, orientation);
             return (
               <path
@@ -353,22 +383,29 @@ export function MetroMapCanvas({
             );
           })}
 
+          {/* Trunk + branch + PR route paths. */}
+          {routeLayout.paths.map((path) => (
+            <path
+              key={path.id}
+              data-testid={`route-path-${path.branchId}-${path.segmentKind}`}
+              data-segment-kind={path.segmentKind}
+              data-route-kind={path.kind}
+              d={path.d}
+              fill="none"
+              stroke={path.color}
+              strokeWidth={theme.lineWidth}
+              strokeDasharray={path.dashArray}
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              opacity={path.opacity}
+            />
+          ))}
+
+          {/* Legacy synthetic-pr edges (pre-reconstruction mode). */}
           {syntheticEdges.map((ed) => {
             if (ed.branchId && !visibleBranches.has(ed.branchId)) return null;
-            if (
-              !visibleBranches.has(ed.from.branch) ||
-              !visibleBranches.has(ed.to.branch)
-            ) {
-              return null;
-            }
-            const p1 = layout.posForCommit(
-              ed.from,
-              branchById[ed.from.branch].lane,
-            );
-            const p2 = layout.posForCommit(
-              ed.to,
-              branchById[ed.to.branch].lane,
-            );
+            const p1 = { x: ed.from.x, y: ed.from.y };
+            const p2 = { x: ed.to.x, y: ed.to.y };
             const d = rectPath(p1, p2, orientation);
             return (
               <path
@@ -386,38 +423,42 @@ export function MetroMapCanvas({
             );
           })}
 
-          {branches.map((b) => {
-            if (!visibleBranches.has(b.id)) return null;
-            const chain = branchChains[b.id];
-            if (chain.length < 2) return null;
+          {/* Merge-back transfer ring overlay on default branch anchor stations. */}
+          {Array.from(routeLayout.mergeBackTargetKeys).map((key) => {
+            const station = routeLayout.byKey[key];
+            if (!station) return null;
             return (
-              <path
-                key={`chain-${b.id}`}
-                data-testid={`branch-chain-${b.id}`}
-                d={chainPath(chain)}
+              <circle
+                key={`transfer-${key}`}
+                cx={station.x}
+                cy={station.y}
+                r={11}
                 fill="none"
-                stroke={b.color}
-                strokeWidth={theme.lineWidth}
-                strokeLinecap="round"
-                opacity={0.95}
+                stroke={theme.guide}
+                strokeWidth={1.5}
+                opacity={0.75}
               />
             );
           })}
 
-          {commits.map((c) => {
+          {/* Stations + virtual nodes. */}
+          {data.commits.map((c) => {
             if (!showCommit(c)) return null;
-            const b = branchById[c.branch];
-            if (!b) return null;
-            const p = layout.posForCommit(c, b.lane);
             const key = getVisualNodeId(c);
+            const station = routeLayout.byKey[key];
+            if (!station) return null;
+            const branch = branchById[c.branch];
+            if (!branch) return null;
+            const color =
+              routeLayout.routeColorByBranchId[c.branch] ?? branch.color;
             const isSelected = key === selectedKey;
             if (c.isVirtual) {
               return (
                 <VirtualStation
                   key={key}
                   commit={c}
-                  pos={p}
-                  color={b.color}
+                  pos={{ x: station.x, y: station.y }}
+                  color={color}
                   theme={theme}
                   selected={isSelected}
                   onSelect={() => onSelectCommit(c)}
@@ -430,8 +471,8 @@ export function MetroMapCanvas({
               <Station
                 key={key}
                 commit={c}
-                pos={p}
-                color={b.color}
+                pos={{ x: station.x, y: station.y }}
+                color={color}
                 nodeStyle={nodeStyle}
                 theme={theme}
                 selected={isSelected}
@@ -442,38 +483,44 @@ export function MetroMapCanvas({
             );
           })}
 
-          {laneLabels.map(
-            (l) =>
-              visibleBranches.has(l.id) && (
-                <g key={`label-${l.id}`} transform={`translate(${l.lx},${l.ly})`}>
-                  <rect
-                    x={orientation === "horizontal" ? 0 : -36}
-                    y={orientation === "horizontal" ? -14 : 0}
-                    width={72}
-                    height={22}
-                    rx={4}
-                    fill={l.color}
-                  />
-                  <text
-                    x={orientation === "horizontal" ? 36 : 0}
-                    y={orientation === "horizontal" ? 1 : 14}
-                    textAnchor="middle"
-                    dominantBaseline="middle"
-                    fontFamily="Inter, sans-serif"
-                    fontWeight={600}
-                    fontSize={11}
-                    fill={theme.labelText}
-                    style={{ letterSpacing: "0.02em" }}
-                  >
-                    {l.name}
-                  </text>
-                </g>
-              ),
-          )}
+          {/* Lane labels at the left edge. */}
+          {routeLayout.laneLabels.map((label) => (
+            <g
+              key={`label-${label.branchId}`}
+              transform={`translate(${label.x},${label.y})`}
+            >
+              <rect
+                x={orientation === "horizontal" ? 0 : -36}
+                y={orientation === "horizontal" ? -14 : 0}
+                width={Math.min(92, Math.max(56, label.name.length * 7))}
+                height={22}
+                rx={4}
+                fill={label.color}
+              />
+              <text
+                x={orientation === "horizontal" ? 36 : 0}
+                y={orientation === "horizontal" ? 1 : 14}
+                textAnchor="middle"
+                dominantBaseline="middle"
+                fontFamily="Inter, sans-serif"
+                fontWeight={600}
+                fontSize={11}
+                fill={theme.labelText}
+                style={{ letterSpacing: "0.02em" }}
+              >
+                {truncateLabel(label.name, 14)}
+              </text>
+            </g>
+          ))}
         </g>
       </svg>
     </div>
   );
+}
+
+function truncateLabel(name: string, max: number): string {
+  if (name.length <= max) return name;
+  return name.slice(0, max - 1) + "…";
 }
 
 interface VirtualStationProps {
@@ -537,7 +584,7 @@ function VirtualStation({
             strokeWidth={1.5}
             opacity={0.5}
           />
-          <circle r={radius} fill={color} opacity={0.8} />
+          <circle r={radius} fill={color} opacity={0.85} />
         </>
       )}
     </g>

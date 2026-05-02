@@ -297,3 +297,127 @@ describe("MapShell PR history toggle", () => {
     ).not.toBeInTheDocument();
   });
 });
+
+const PR_MODE_GRAPH: GitMetroGraph = {
+  repo: { ...MOCK_GRAPH.repo },
+  branches: [
+    {
+      id: "main",
+      name: "main",
+      category: "main",
+      lane: 0,
+      color: "#ff5b5b",
+      isDefault: true,
+      isActive: true,
+      source: "ref",
+    },
+    {
+      id: "develop",
+      name: "develop",
+      category: "develop",
+      lane: -1,
+      color: "#f3d54e",
+      isActive: true,
+      source: "ref",
+    },
+    {
+      id: "0.10-stable",
+      name: "0.10-stable",
+      category: "other",
+      lane: -2,
+      color: "#3ddbd9",
+      isActive: true,
+      source: "ref",
+    },
+    {
+      id: "pr/123",
+      name: "feature/whatever",
+      category: "feature",
+      lane: -3,
+      color: "#3dd68c",
+      isHistorical: true,
+      isActive: true,
+      source: "pull-request",
+      pullNumber: 123,
+    },
+  ],
+  commits: [
+    {
+      sha: "M0",
+      shortSha: "M0",
+      branch: "main",
+      t: 0,
+      parents: [],
+      message: "init",
+      author: "x",
+      date: "2026-04-01 00:00",
+      isMerge: false,
+    },
+    {
+      sha: "M1",
+      shortSha: "M1",
+      branch: "main",
+      t: 4,
+      parents: ["M0"],
+      message: "release",
+      author: "x",
+      date: "2026-04-08 00:00",
+      isMerge: false,
+      isHead: true,
+    },
+    {
+      sha: "D1",
+      shortSha: "D1",
+      branch: "develop",
+      t: 2,
+      parents: ["M0"],
+      message: "develop work",
+      author: "x",
+      date: "2026-04-04 00:00",
+      isMerge: false,
+    },
+    {
+      sha: "S1",
+      shortSha: "S1",
+      branch: "0.10-stable",
+      t: 1,
+      parents: ["M0"],
+      message: "stable old",
+      author: "x",
+      date: "2026-04-02 00:00",
+      isMerge: false,
+    },
+  ],
+};
+
+describe("MapShell default visible policy", () => {
+  beforeEach(() => {
+    cleanup();
+  });
+
+  it("hides 'other' ref branches by default when PR branches exist", () => {
+    render(<MapShell graph={PR_MODE_GRAPH} skipInitialLoading />);
+    // S1 sits on the 0.10-stable branch which should be hidden initially.
+    expect(screen.queryByTestId("station-S1")).not.toBeInTheDocument();
+    // Develop and main remain visible.
+    expect(screen.getByTestId("station-D1")).toBeInTheDocument();
+    expect(screen.getByTestId("station-M0")).toBeInTheDocument();
+  });
+
+  it("keeps the 'other' branch togglable from the panel even when hidden", () => {
+    render(<MapShell graph={PR_MODE_GRAPH} skipInitialLoading />);
+    const stableButton = screen.getByText("0.10-stable").closest("button");
+    expect(stableButton).toBeTruthy();
+    fireEvent.click(stableButton!);
+    expect(screen.getByTestId("station-S1")).toBeInTheDocument();
+  });
+
+  it("keeps every branch visible when there are no PR branches", () => {
+    render(<MapShell graph={MOCK_GRAPH} skipInitialLoading />);
+    expect(screen.getByTestId("metro-canvas")).toBeInTheDocument();
+    // featureA + featureB stations from MOCK_GRAPH should be present.
+    expect(
+      screen.getByTestId(`station-${MOCK_GRAPH.commits[0].sha}`),
+    ).toBeInTheDocument();
+  });
+});

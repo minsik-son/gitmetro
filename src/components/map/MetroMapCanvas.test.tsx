@@ -9,6 +9,8 @@ function setup(overrides?: {
   data?: GitMetroGraph;
   visible?: Set<string>;
   selectedKey?: string | null;
+  zoom?: number;
+  pan?: { x: number; y: number };
 }) {
   const onSelectCommit = vi.fn();
   const onHoverChange = vi.fn();
@@ -30,15 +32,36 @@ function setup(overrides?: {
       selectedKey={overrides?.selectedKey ?? null}
       onSelectCommit={onSelectCommit}
       onHoverChange={onHoverChange}
-      zoom={1}
+      zoom={overrides?.zoom ?? 1}
       setZoom={setZoom}
-      pan={{ x: 0, y: 0 }}
+      pan={overrides?.pan ?? { x: 0, y: 0 }}
       setPan={setPan}
       onClearSelection={onClearSelection}
     />,
   );
 
-  return { ...utils, onSelectCommit, onHoverChange, onClearSelection };
+  return {
+    ...utils,
+    onSelectCommit,
+    onHoverChange,
+    onClearSelection,
+    setZoom,
+    setPan,
+  };
+}
+
+function mockCanvasRect(canvas: Element) {
+  vi.spyOn(canvas, "getBoundingClientRect").mockReturnValue({
+    left: 100,
+    top: 50,
+    width: 800,
+    height: 600,
+    right: 900,
+    bottom: 650,
+    x: 100,
+    y: 50,
+    toJSON: () => ({}),
+  });
 }
 
 describe("MetroMapCanvas", () => {
@@ -379,19 +402,28 @@ describe("MetroMapCanvas", () => {
     };
   }
 
-  it("renders pr-branch-off, pr-merge-back, and pr-chain edges", () => {
+  it("renders branch-off, branch, and merge-back route segments for the PR", () => {
     const { container } = setup({ data: reconstructedGraph() });
     expect(
-      container.querySelector('[data-testid="pr-branch-off-edge-pr-off/77"]'),
-    ).toBeInTheDocument();
-    expect(
-      container.querySelector('[data-testid="pr-merge-back-edge-pr-back/77"]'),
-    ).toBeInTheDocument();
-    expect(
       container.querySelector(
-        '[data-testid="pr-chain-edge-pr-chain/77/start"]',
+        '[data-testid="route-path-pr/77-branch-off"]',
       ),
     ).toBeInTheDocument();
+    expect(
+      container.querySelector('[data-testid="route-path-pr/77-branch"]'),
+    ).toBeInTheDocument();
+    expect(
+      container.querySelector('[data-testid="route-path-pr/77-merge-back"]'),
+    ).toBeInTheDocument();
+  });
+
+  it("renders the PR route branch-off as a solid (non-dashed) path", () => {
+    const { container } = setup({ data: reconstructedGraph() });
+    const off = container.querySelector(
+      '[data-testid="route-path-pr/77-branch-off"]',
+    );
+    expect(off).toBeInTheDocument();
+    expect(off?.getAttribute("stroke-dasharray")).toBeFalsy();
   });
 
   it("renders virtual pr-start and pr-end stations", () => {
@@ -404,23 +436,131 @@ describe("MetroMapCanvas", () => {
     ).toBeInTheDocument();
   });
 
-  it("draws a single-commit PR branch chain (chain length >= 2)", () => {
+  it("draws a single-commit PR route as a visible branch path", () => {
     const { container } = setup({ data: reconstructedGraph() });
     expect(
-      container.querySelector('[data-testid="branch-chain-pr/77"]'),
+      container.querySelector('[data-testid="route-path-pr/77-branch"]'),
     ).toBeInTheDocument();
   });
 
-  it("hides PR-related edges when the PR branch is not visible", () => {
+  describe("pointer-anchored wheel zoom", () => {
+    it("calls setZoom and setPan together on ctrl+wheel", () => {
+      const { setZoom, setPan } = setup();
+      const canvas = screen.getByTestId("metro-canvas");
+      mockCanvasRect(canvas);
+      fireEvent.wheel(canvas, {
+        ctrlKey: true,
+        deltaY: -100,
+        clientX: 500,
+        clientY: 350,
+      });
+      expect(setZoom).toHaveBeenCalled();
+      expect(setPan).toHaveBeenCalled();
+    });
+
+    it("ignores wheel events without ctrl/meta modifier", () => {
+      const { setZoom, setPan } = setup();
+      const canvas = screen.getByTestId("metro-canvas");
+      mockCanvasRect(canvas);
+      fireEvent.wheel(canvas, {
+        deltaY: -100,
+        clientX: 500,
+        clientY: 350,
+      });
+      expect(setZoom).not.toHaveBeenCalled();
+      expect(setPan).not.toHaveBeenCalled();
+    });
+
+    it("keeps the world point under the cursor pinned on zoom in", () => {
+      const { setZoom, setPan } = setup({
+        zoom: 1,
+        pan: { x: 0, y: 0 },
+      });
+      const canvas = screen.getByTestId("metro-canvas");
+      mockCanvasRect(canvas);
+      // Mouse at container-local (400, 300). delta = -(-100)*0.0015 = 0.15.
+      fireEvent.wheel(canvas, {
+        ctrlKey: true,
+        deltaY: -100,
+        clientX: 100 + 400,
+        clientY: 50 + 300,
+      });
+      const nextZoom = (setZoom.mock.calls[0][0] as (z: number) => number)(1);
+      expect(nextZoom).toBeCloseTo(1.15, 5);
+      const nextPan = setPan.mock.calls[0][0] as { x: number; y: number };
+      // worldX = 400, worldY = 300. nextPan = anchor - world * nextZoom.
+      expect(nextPan.x).toBeCloseTo(400 - 400 * 1.15, 5);
+      expect(nextPan.y).toBeCloseTo(300 - 300 * 1.15, 5);
+      // Verify invariant: pan + world * nextZoom === anchor.
+      const screenAfter = {
+        x: nextPan.x + 400 * nextZoom,
+        y: nextPan.y + 300 * nextZoom,
+      };
+      expect(screenAfter.x).toBeCloseTo(400, 5);
+      expect(screenAfter.y).toBeCloseTo(300, 5);
+    });
+
+    it("keeps the world point pinned on zoom out from a non-zero pan", () => {
+      const { setZoom, setPan } = setup({
+        zoom: 1.5,
+        pan: { x: 220, y: 130 },
+      });
+      const canvas = screen.getByTestId("metro-canvas");
+      mockCanvasRect(canvas);
+      // Mouse at container-local (250, 180). delta = -(80)*0.0015 = -0.12.
+      fireEvent.wheel(canvas, {
+        ctrlKey: true,
+        deltaY: 80,
+        clientX: 100 + 250,
+        clientY: 50 + 180,
+      });
+      const nextZoom = (setZoom.mock.calls[0][0] as (z: number) => number)(1.5);
+      expect(nextZoom).toBeCloseTo(1.38, 5);
+      const nextPan = setPan.mock.calls[0][0] as { x: number; y: number };
+      const worldX = (250 - 220) / 1.5;
+      const worldY = (180 - 130) / 1.5;
+      const screenAfter = {
+        x: nextPan.x + worldX * nextZoom,
+        y: nextPan.y + worldY * nextZoom,
+      };
+      expect(screenAfter.x).toBeCloseTo(250, 5);
+      expect(screenAfter.y).toBeCloseTo(180, 5);
+    });
+
+    it("does not call setZoom/setPan when zoom is already clamped at the boundary", () => {
+      const { setZoom, setPan } = setup({
+        zoom: 2,
+        pan: { x: 0, y: 0 },
+      });
+      const canvas = screen.getByTestId("metro-canvas");
+      mockCanvasRect(canvas);
+      // Try to zoom further in past max — clampZoom returns 2, equal to old.
+      fireEvent.wheel(canvas, {
+        ctrlKey: true,
+        deltaY: -1000,
+        clientX: 500,
+        clientY: 350,
+      });
+      expect(setZoom).not.toHaveBeenCalled();
+      expect(setPan).not.toHaveBeenCalled();
+    });
+  });
+
+  it("hides PR-related route segments when the PR branch is not visible", () => {
     const { container } = setup({
       data: reconstructedGraph(),
       visible: new Set(["main"]),
     });
     expect(
-      container.querySelector('[data-testid="pr-branch-off-edge-pr-off/77"]'),
+      container.querySelector(
+        '[data-testid="route-path-pr/77-branch-off"]',
+      ),
     ).not.toBeInTheDocument();
     expect(
-      container.querySelector('[data-testid="pr-merge-back-edge-pr-back/77"]'),
+      container.querySelector('[data-testid="route-path-pr/77-merge-back"]'),
+    ).not.toBeInTheDocument();
+    expect(
+      container.querySelector('[data-testid="route-path-pr/77-branch"]'),
     ).not.toBeInTheDocument();
   });
 });

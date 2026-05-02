@@ -21,7 +21,7 @@ export function ZoomControls({ zoom, setZoom, setPan }: Props) {
       <span className="font-mono text-xs text-muted">{Math.round(zoom * 100)}%</span>
       <button
         className="flex h-7 w-7 items-center justify-center rounded text-muted transition hover:bg-panel hover:text-text"
-        onClick={() => setZoom((z) => Math.max(0.5, z - 0.15))}
+        onClick={() => setZoom((z) => Math.max(0.25, z - 0.15))}
         aria-label="Zoom out"
       >
         <MinusIcon />
