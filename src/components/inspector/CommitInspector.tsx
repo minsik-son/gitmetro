@@ -1,17 +1,20 @@
 "use client";
 
 import type { CommitNode, GitMetroGraph } from "@/types/gitmetro";
+import { getVisualNodeId } from "@/lib/graph/visualNode";
 
 interface Props {
   commit: CommitNode;
   graph: GitMetroGraph;
-  onSelectSha: (sha: string) => void;
+  onSelectSha: (key: string) => void;
 }
 
 export function CommitInspector({ commit, graph, onSelectSha }: Props) {
   const branch = graph.branches.find((b) => b.id === commit.branch);
   const parents = commit.parents
-    .map((p) => graph.commits.find((c) => c.sha === p))
+    .map((p) =>
+      graph.commits.find((c) => getVisualNodeId(c) === p || c.sha === p),
+    )
     .filter((c): c is CommitNode => !!c);
 
   if (!branch) return null;
@@ -104,10 +107,11 @@ export function CommitInspector({ commit, graph, onSelectSha }: Props) {
             <div className="flex flex-col gap-1">
               {parents.map((p) => {
                 const pBranch = graph.branches.find((b) => b.id === p.branch);
+                const key = getVisualNodeId(p);
                 return (
                   <button
-                    key={p.sha}
-                    onClick={() => onSelectSha(p.sha)}
+                    key={key}
+                    onClick={() => onSelectSha(key)}
                     className="flex items-center gap-2 rounded px-1.5 py-1 text-left text-xs transition hover:bg-panel-alt"
                   >
                     <span

@@ -1,4 +1,5 @@
 import type { BranchLine, CommitNode, MapOrientation } from "@/types/gitmetro";
+import { buildVisualNodeIndex } from "@/lib/graph/visualNode";
 import { stackedLaneStrategy, type LaneStrategy } from "./laneStrategy";
 
 export const STEP = 78;
@@ -15,11 +16,17 @@ export interface Point {
 export interface MapLayout {
   laneByBranchId: Record<string, number>;
   pos: (t: number, lane: number) => Point;
+  posForCommit: (commit: CommitNode, lane: number) => Point;
   bySha: Record<string, CommitNode>;
+  byNodeId: Record<string, CommitNode>;
   width: number;
   height: number;
   tMax: number;
   minLane: number;
+}
+
+function visualT(c: CommitNode): number {
+  return c.displayT ?? c.t;
 }
 
 export function buildLayout(
@@ -29,7 +36,8 @@ export function buildLayout(
   strategy: LaneStrategy = stackedLaneStrategy,
 ): MapLayout {
   const laneByBranchId = strategy(branches);
-  const tMax = commits.length === 0 ? 0 : Math.max(...commits.map((c) => c.t));
+  const tMax =
+    commits.length === 0 ? 0 : Math.max(...commits.map(visualT));
   const lanes = branches.map((b) => laneByBranchId[b.id] ?? b.lane);
   const minLane = lanes.length === 0 ? 0 : Math.min(...lanes);
 
@@ -42,10 +50,15 @@ export function buildLayout(
     return { x: PAD_X + laneCoord(lane), y: PAD_Y + t * STEP };
   };
 
+  const posForCommit = (commit: CommitNode, lane: number): Point =>
+    pos(visualT(commit), lane);
+
   const bySha: Record<string, CommitNode> = {};
   commits.forEach((c) => {
-    bySha[c.sha] = c;
+    if (!bySha[c.sha]) bySha[c.sha] = c;
   });
+
+  const byNodeId = buildVisualNodeIndex(commits);
 
   const width =
     orientation === "horizontal"
@@ -56,7 +69,17 @@ export function buildLayout(
       ? PAD_Y + (Math.abs(minLane) + 1) * LANE + 80
       : PAD_Y + (tMax + 1.2) * STEP;
 
-  return { laneByBranchId, pos, bySha, width, height, tMax, minLane };
+  return {
+    laneByBranchId,
+    pos,
+    posForCommit,
+    bySha,
+    byNodeId,
+    width,
+    height,
+    tMax,
+    minLane,
+  };
 }
 
 export interface RectPathOptions {

@@ -17,6 +17,18 @@ export interface GraphMeta {
     capped: boolean;
     source: "first-parent-merge";
   };
+  prHistory?: {
+    enabled: boolean;
+    branches: number;
+    capped: boolean;
+    fetchedPulls: number;
+    fetchedPullCommits: number;
+    mode?: "legacy" | "reconstructed";
+    reconstructedBranches?: number;
+    virtualNodes?: number;
+    branchOffEdges?: number;
+    mergeBackEdges?: number;
+  };
   rateLimit?: {
     limit?: number;
     remaining?: number;

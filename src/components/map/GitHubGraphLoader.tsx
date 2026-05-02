@@ -82,6 +82,7 @@ export function GitHubGraphLoader({ owner, repo }: Props) {
       graph={state.graph}
       skipInitialLoading
       truncated={state.meta.truncated}
+      meta={state.meta}
     />
   );
 }

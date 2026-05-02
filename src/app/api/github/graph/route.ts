@@ -3,13 +3,22 @@ import { fetchRepository } from "@/lib/github/fetchRepository";
 import { fetchBranches } from "@/lib/github/fetchBranches";
 import { fetchCommits } from "@/lib/github/fetchCommits";
 import { fetchTags } from "@/lib/github/fetchTags";
+import { fetchMergedPullRequests } from "@/lib/github/fetchPullRequests";
+import { fetchPullRequestCommits } from "@/lib/github/fetchPullRequestCommits";
 import { GitHubApiError } from "@/lib/github/errors";
 import { selectBranches } from "@/lib/graph/branchSelection";
 import {
   DEFAULT_NORMALIZE_OPTIONS,
   normalizeGitHubGraph,
 } from "@/lib/graph/normalizeGitHubGraph";
+import { buildPrHistory } from "@/lib/graph/prHistory";
+import { buildPrTimelineHistory } from "@/lib/graph/prTimelineReconstruction";
 import { parseRepoInput } from "@/lib/github/parseRepoInput";
+import {
+  GRAPH_CACHE_TTL_MS,
+  PR_CACHE_TTL_MS,
+  getOrSetCached,
+} from "@/lib/cache/memoryCache";
 import type {
   GitHubCommitListItem,
   RateLimitMeta,
@@ -27,7 +36,26 @@ const CLAMP = {
   commitLimit: { min: 50, max: 1000 },
   historyLimit: { min: 0, max: 50 },
   historyCommitLimit: { min: 5, max: 100 },
+  prHistoryLimit: { min: 0, max: 50 },
+  prCommitLimit: { min: 1, max: 100 },
+  prListPages: { min: 1, max: 5 },
+  minPrVisualSpan: { min: 1, max: 8 },
 };
+
+const DEFAULT_PR_HISTORY_LIMIT = 24;
+const DEFAULT_PR_COMMIT_LIMIT = 40;
+const DEFAULT_PR_LIST_PAGES = 2;
+const DEFAULT_INCLUDE_PR_HISTORY = true;
+const DEFAULT_MIN_PR_VISUAL_SPAN = 2;
+const DEFAULT_PR_TIMELINE_MODE: PrTimelineMode = "reconstructed";
+
+type PrTimelineMode = "reconstructed" | "legacy";
+
+function readPrTimelineMode(url: URL): PrTimelineMode {
+  const raw = url.searchParams.get("prTimelineMode");
+  if (raw === "legacy" || raw === "reconstructed") return raw;
+  return DEFAULT_PR_TIMELINE_MODE;
+}
 
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
@@ -58,6 +86,29 @@ function failureResponse(failure: GraphApiFailure, status?: number) {
   return NextResponse.json(failure, { status: status ?? failure.error.status ?? 500 });
 }
 
+function buildGraphCacheKey(
+  owner: string,
+  repo: string,
+  o: GraphRouteOptions,
+): string {
+  return [
+    "github-graph",
+    `${owner}/${repo}`,
+    `maxBranches=${o.maxBranches}`,
+    `commitLimit=${o.commitLimit}`,
+    `branchCommitLimit=${o.branchCommitLimit}`,
+    `includeHistory=${o.includeHistory}`,
+    `historyLimit=${o.historyLimit}`,
+    `historyCommitLimit=${o.historyCommitLimit}`,
+    `includePrHistory=${o.includePrHistory}`,
+    `prHistoryLimit=${o.prHistoryLimit}`,
+    `prCommitLimit=${o.prCommitLimit}`,
+    `prListPages=${o.prListPages}`,
+    `prTimelineMode=${o.prTimelineMode}`,
+    `minPrVisualSpan=${o.minPrVisualSpan}`,
+  ].join(":");
+}
+
 export async function GET(req: Request) {
   const url = new URL(req.url);
   const owner = url.searchParams.get("owner") ?? "";
@@ -78,7 +129,7 @@ export async function GET(req: Request) {
     );
   }
 
-  const options = {
+  const options: GraphRouteOptions = {
     maxBranches: readNumber(
       url,
       "maxBranches",
@@ -114,99 +165,48 @@ export async function GET(req: Request) {
       DEFAULT_NORMALIZE_OPTIONS.historyCommitLimit,
       CLAMP.historyCommitLimit,
     ),
+    includePrHistory: readBoolean(
+      url,
+      "includePrHistory",
+      DEFAULT_INCLUDE_PR_HISTORY,
+    ),
+    prHistoryLimit: readNumber(
+      url,
+      "prHistoryLimit",
+      DEFAULT_PR_HISTORY_LIMIT,
+      CLAMP.prHistoryLimit,
+    ),
+    prCommitLimit: readNumber(
+      url,
+      "prCommitLimit",
+      DEFAULT_PR_COMMIT_LIMIT,
+      CLAMP.prCommitLimit,
+    ),
+    prListPages: readNumber(
+      url,
+      "prListPages",
+      DEFAULT_PR_LIST_PAGES,
+      CLAMP.prListPages,
+    ),
+    prTimelineMode: readPrTimelineMode(url),
+    minPrVisualSpan: readNumber(
+      url,
+      "minPrVisualSpan",
+      DEFAULT_MIN_PR_VISUAL_SPAN,
+      CLAMP.minPrVisualSpan,
+    ),
   };
 
+  const cacheKey = buildGraphCacheKey(parsed.value.owner, parsed.value.repo, options);
+
   try {
-    const repoResult = await fetchRepository(parsed.value.owner, parsed.value.repo);
-    const lastRateLimit: RateLimitMeta = repoResult.rateLimit;
-
-    const branchList = await fetchBranches(parsed.value.owner, parsed.value.repo);
-    if (branchList.length === 0) {
-      return failureResponse(
-        {
-          ok: false,
-          error: {
-            code: "empty_graph",
-            message: "Repository has no branches.",
-            status: 409,
-          },
-        },
-        409,
-      );
+    const result = await getOrSetCached(cacheKey, GRAPH_CACHE_TTL_MS, () =>
+      buildGraphResponse(parsed.value.owner, parsed.value.repo, options),
+    );
+    if (!result.ok) {
+      return failureResponse(result.failure, result.failure.error.status);
     }
-
-    const selected = selectBranches({
-      branches: branchList,
-      defaultBranch: repoResult.repo.default_branch,
-      maxBranches: options.maxBranches,
-    });
-
-    const commitsByBranch: Record<string, GitHubCommitListItem[]> = {};
-    let totalFetched = 0;
-    for (const branch of selected) {
-      if (totalFetched >= options.commitLimit) {
-        commitsByBranch[branch.name] = [];
-        continue;
-      }
-      const remainingTotal = options.commitLimit - totalFetched;
-      const list = await fetchCommits(
-        parsed.value.owner,
-        parsed.value.repo,
-        branch.name,
-        {
-          limit: Math.min(options.branchCommitLimit, remainingTotal),
-        },
-      );
-      commitsByBranch[branch.name] = list;
-      totalFetched += list.length;
-    }
-
-    const tagResult = await fetchTags(parsed.value.owner, parsed.value.repo);
-
-    const normalize = normalizeGitHubGraph({
-      repo: repoResult.repo,
-      branches: branchList,
-      commitsByBranch,
-      tags: tagResult.tags,
-      options,
-    });
-
-    if (normalize.graph.commits.length === 0) {
-      return failureResponse(
-        {
-          ok: false,
-          error: {
-            code: "empty_graph",
-            message: "No commits found for selected branches.",
-            status: 409,
-          },
-        },
-        409,
-      );
-    }
-
-    const warnings = [...normalize.meta.warnings];
-    if (tagResult.warning) warnings.push(tagResult.warning);
-
-    const success: GraphApiSuccess = {
-      ok: true,
-      graph: normalize.graph,
-      meta: {
-        source: "github",
-        owner: parsed.value.owner,
-        repo: parsed.value.repo,
-        truncated: normalize.meta.truncated,
-        selectedBranches: normalize.meta.selectedBranches,
-        fetchedCommits: normalize.meta.fetchedCommits,
-        maxBranches: options.maxBranches,
-        commitLimit: options.commitLimit,
-        warnings,
-        history: normalize.meta.history,
-        rateLimit: lastRateLimit,
-      },
-    };
-
-    return NextResponse.json(success);
+    return NextResponse.json(result.success);
   } catch (err) {
     if (err instanceof GitHubApiError) {
       return failureResponse({
@@ -231,4 +231,260 @@ export async function GET(req: Request) {
       500,
     );
   }
+}
+
+interface GraphRouteOptions {
+  maxBranches: number;
+  branchCommitLimit: number;
+  commitLimit: number;
+  includeHistory: boolean;
+  historyLimit: number;
+  historyCommitLimit: number;
+  includePrHistory: boolean;
+  prHistoryLimit: number;
+  prCommitLimit: number;
+  prListPages: number;
+  prTimelineMode: PrTimelineMode;
+  minPrVisualSpan: number;
+}
+
+type BuildGraphResult =
+  | { ok: true; success: GraphApiSuccess }
+  | { ok: false; failure: GraphApiFailure };
+
+async function buildGraphResponse(
+  owner: string,
+  repo: string,
+  options: GraphRouteOptions,
+): Promise<BuildGraphResult> {
+  const repoResult = await fetchRepository(owner, repo);
+  const lastRateLimit: RateLimitMeta = repoResult.rateLimit;
+
+  const branchList = await fetchBranches(owner, repo);
+  if (branchList.length === 0) {
+    return {
+      ok: false,
+      failure: {
+        ok: false,
+        error: {
+          code: "empty_graph",
+          message: "Repository has no branches.",
+          status: 409,
+        },
+      },
+    };
+  }
+
+  const selected = selectBranches({
+    branches: branchList,
+    defaultBranch: repoResult.repo.default_branch,
+    maxBranches: options.maxBranches,
+  });
+
+  const commitsByBranch: Record<string, GitHubCommitListItem[]> = {};
+  let totalFetched = 0;
+  for (const branch of selected) {
+    if (totalFetched >= options.commitLimit) {
+      commitsByBranch[branch.name] = [];
+      continue;
+    }
+    const remainingTotal = options.commitLimit - totalFetched;
+    const list = await fetchCommits(owner, repo, branch.name, {
+      limit: Math.min(options.branchCommitLimit, remainingTotal),
+    });
+    commitsByBranch[branch.name] = list;
+    totalFetched += list.length;
+  }
+
+  const tagResult = await fetchTags(owner, repo);
+
+  const normalize = normalizeGitHubGraph({
+    repo: repoResult.repo,
+    branches: branchList,
+    commitsByBranch,
+    tags: tagResult.tags,
+    options,
+  });
+
+  if (normalize.graph.commits.length === 0) {
+    return {
+      ok: false,
+      failure: {
+        ok: false,
+        error: {
+          code: "empty_graph",
+          message: "No commits found for selected branches.",
+          status: 409,
+        },
+      },
+    };
+  }
+
+  const warnings = [...normalize.meta.warnings];
+  if (tagResult.warning) warnings.push(tagResult.warning);
+
+  // PR enrichment: best-effort, never fails the whole request.
+  let prMeta: GraphApiSuccess["meta"]["prHistory"] | undefined;
+  if (options.includePrHistory && options.prHistoryLimit > 0) {
+    try {
+      const prList = await getOrSetCached(
+        `github-pr-list:${owner}/${repo}:base=${repoResult.repo.default_branch}:limit=${options.prHistoryLimit}:pages=${options.prListPages}`,
+        PR_CACHE_TTL_MS,
+        () =>
+          fetchMergedPullRequests(owner, repo, {
+            base: repoResult.repo.default_branch,
+            limit: options.prHistoryLimit,
+            maxPages: options.prListPages,
+          }),
+      );
+
+      const commitsByPull: Record<number, GitHubCommitListItem[]> = {};
+      for (const pull of prList) {
+        try {
+          const prCommits = await getOrSetCached(
+            `github-pr-commits:${owner}/${repo}:pull=${pull.number}:limit=${options.prCommitLimit}`,
+            PR_CACHE_TTL_MS,
+            () =>
+              fetchPullRequestCommits(owner, repo, pull.number, {
+                limit: options.prCommitLimit,
+              }),
+          );
+          commitsByPull[pull.number] = prCommits;
+        } catch (err) {
+          warnings.push(
+            `PR #${pull.number}: commits fetch failed (${describeFetchError(err)})`,
+          );
+        }
+      }
+
+      const existingCommitsBySha: Record<string, (typeof normalize.graph.commits)[number]> = {};
+      normalize.graph.commits.forEach((c) => {
+        existingCommitsBySha[c.sha] = c;
+      });
+
+      const minLane = normalize.graph.branches.reduce(
+        (acc, b) => Math.min(acc, b.lane),
+        0,
+      );
+
+      if (options.prTimelineMode === "reconstructed") {
+        const pr = buildPrTimelineHistory({
+          pulls: prList,
+          commitsByPull,
+          existingBranches: normalize.graph.branches,
+          existingCommits: normalize.graph.commits,
+          existingCommitsBySha,
+          defaultBranchName: repoResult.repo.default_branch,
+          startLane: minLane - 1,
+          prHistoryLimit: options.prHistoryLimit,
+          prCommitLimit: options.prCommitLimit,
+          minPrVisualSpan: options.minPrVisualSpan,
+        });
+
+        normalize.graph.branches.push(...pr.branches);
+        normalize.graph.commits.push(...pr.commits);
+        if (pr.edges.length > 0) {
+          normalize.graph.edges = [...(normalize.graph.edges ?? []), ...pr.edges];
+        }
+        pr.warnings.forEach((w) => warnings.push(w));
+
+        prMeta = {
+          enabled: true,
+          branches: pr.branches.length,
+          capped: pr.capped,
+          fetchedPulls: pr.fetchedPulls,
+          fetchedPullCommits: pr.fetchedPullCommits,
+          mode: "reconstructed",
+          reconstructedBranches: pr.reconstructedBranches,
+          virtualNodes: pr.virtualNodes,
+          branchOffEdges: pr.branchOffEdges,
+          mergeBackEdges: pr.mergeBackEdges,
+        };
+      } else {
+        const pr = buildPrHistory({
+          pulls: prList,
+          commitsByPull,
+          existingBranches: normalize.graph.branches,
+          existingCommitsBySha,
+          defaultBranchName: repoResult.repo.default_branch,
+          startLane: minLane - 1,
+          prHistoryLimit: options.prHistoryLimit,
+          prCommitLimit: options.prCommitLimit,
+        });
+
+        normalize.graph.branches.push(...pr.branches);
+        normalize.graph.commits.push(...pr.commits);
+        if (pr.edges.length > 0) {
+          normalize.graph.edges = [...(normalize.graph.edges ?? []), ...pr.edges];
+        }
+        pr.warnings.forEach((w) => warnings.push(w));
+
+        prMeta = {
+          enabled: true,
+          branches: pr.branches.length,
+          capped: pr.capped,
+          fetchedPulls: pr.fetchedPulls,
+          fetchedPullCommits: pr.fetchedPullCommits,
+          mode: "legacy",
+        };
+      }
+
+      if (
+        prList.length === 0 &&
+        normalize.meta.history.historicalBranches === 0
+      ) {
+        warnings.push(
+          "No merged PRs found via the GitHub PR API; the repository may use a non-standard merge flow.",
+        );
+      }
+    } catch (err) {
+      warnings.push(
+        `PR enrichment skipped (${describeFetchError(err)}); showing branch graph only.`,
+      );
+      prMeta = {
+        enabled: true,
+        branches: 0,
+        capped: false,
+        fetchedPulls: 0,
+        fetchedPullCommits: 0,
+        mode: options.prTimelineMode,
+      };
+    }
+  } else {
+    prMeta = {
+      enabled: false,
+      branches: 0,
+      capped: false,
+      fetchedPulls: 0,
+      fetchedPullCommits: 0,
+      mode: options.prTimelineMode,
+    };
+  }
+
+  const success: GraphApiSuccess = {
+    ok: true,
+    graph: normalize.graph,
+    meta: {
+      source: "github",
+      owner,
+      repo,
+      truncated: normalize.meta.truncated,
+      selectedBranches: normalize.meta.selectedBranches,
+      fetchedCommits: normalize.meta.fetchedCommits,
+      maxBranches: options.maxBranches,
+      commitLimit: options.commitLimit,
+      warnings,
+      history: normalize.meta.history,
+      prHistory: prMeta,
+      rateLimit: lastRateLimit,
+    },
+  };
+
+  return { ok: true, success };
+}
+
+function describeFetchError(err: unknown): string {
+  if (err instanceof GitHubApiError) return err.code;
+  if (err instanceof Error) return err.message;
+  return "unknown";
 }

@@ -10,6 +10,8 @@ interface Props {
   toggle: (id: string) => void;
   showHistory: boolean;
   setShowHistory: (next: boolean) => void;
+  showPrHistory: boolean;
+  setShowPrHistory: (next: boolean) => void;
 }
 
 const CATEGORY_ORDER: BranchCategory[] = [
@@ -69,6 +71,8 @@ export function BranchFilterPanel({
   toggle,
   showHistory,
   setShowHistory,
+  showPrHistory,
+  setShowPrHistory,
 }: Props) {
   const [filter, setFilter] = useState("");
 
@@ -93,6 +97,11 @@ export function BranchFilterPanel({
       });
     return { grouped: g, historical: h };
   }, [branches, filter]);
+
+  const hasPrBranches = historical.some((b) => b.source === "pull-request");
+  const hasMergeHistoryBranches = historical.some(
+    (b) => b.source !== "pull-request",
+  );
 
   return (
     <aside className="flex w-64 flex-col gap-4 overflow-y-auto border-r border-line bg-panel px-3 py-4">
@@ -140,16 +149,20 @@ export function BranchFilterPanel({
             <span>History</span>
             <span>{historical.length}</span>
           </div>
-          <div className={`flex flex-col gap-0.5 ${showHistory ? "" : "opacity-40"}`}>
-            {historical.map((b) => (
-              <BranchRow
-                key={b.id}
-                branch={b}
-                on={visible.has(b.id) && showHistory}
-                onToggle={() => toggle(b.id)}
-                badge={b.pullNumber ? `PR #${b.pullNumber}` : "history"}
-              />
-            ))}
+          <div className="flex flex-col gap-0.5">
+            {historical.map((b) => {
+              const isPr = b.source === "pull-request";
+              const groupOn = isPr ? showPrHistory : showHistory;
+              return (
+                <BranchRow
+                  key={b.id}
+                  branch={b}
+                  on={visible.has(b.id) && groupOn}
+                  onToggle={() => toggle(b.id)}
+                  badge={b.pullNumber ? `PR #${b.pullNumber}` : "history"}
+                />
+              );
+            })}
           </div>
         </div>
       )}
@@ -164,9 +177,21 @@ export function BranchFilterPanel({
             data-testid="show-history-toggle"
             checked={showHistory}
             onChange={(e) => setShowHistory(e.target.checked)}
+            disabled={!hasMergeHistoryBranches}
             className="h-3.5 w-3.5 accent-[#ff5b5b]"
           />
           <span>Show branch history</span>
+        </label>
+        <label className="flex cursor-pointer items-center gap-2 px-2 py-1 text-xs text-text">
+          <input
+            type="checkbox"
+            data-testid="show-pr-history-toggle"
+            checked={showPrHistory}
+            onChange={(e) => setShowPrHistory(e.target.checked)}
+            disabled={!hasPrBranches}
+            className="h-3.5 w-3.5 accent-[#ff5b5b]"
+          />
+          <span>Show PR history</span>
         </label>
       </div>
 

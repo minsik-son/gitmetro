@@ -5,6 +5,8 @@ import { Logo } from "@/components/ui/Logo";
 import { BranchIcon, ExportIcon, GhIcon } from "@/components/ui/icons";
 import { OrientationToggle } from "./OrientationToggle";
 import { ThemeSelector } from "./ThemeSelector";
+import { GraphDiagnostics } from "./GraphDiagnostics";
+import type { GraphMeta } from "@/lib/github/api-types";
 import type { MapOrientation, RepositorySummary, ThemeKey } from "@/types/gitmetro";
 
 interface Props {
@@ -14,6 +16,7 @@ interface Props {
   themeKey: ThemeKey;
   setThemeKey: (next: ThemeKey) => void;
   truncated?: boolean;
+  meta?: GraphMeta;
 }
 
 export function MapToolbar({
@@ -23,6 +26,7 @@ export function MapToolbar({
   themeKey,
   setThemeKey,
   truncated = false,
+  meta,
 }: Props) {
   const githubUrl = `https://github.com/${repo.owner}/${repo.name}`;
   return (
@@ -63,6 +67,7 @@ export function MapToolbar({
       )}
 
       <div className="ml-auto flex items-center gap-2">
+        {meta && <GraphDiagnostics meta={meta} />}
         <OrientationToggle value={orientation} onChange={setOrientation} />
         <ThemeSelector value={themeKey} onChange={setThemeKey} />
         <button

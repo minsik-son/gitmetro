@@ -46,3 +46,29 @@ export interface RateLimitMeta {
   remaining?: number;
   reset?: number;
 }
+
+export interface GitHubPullRequestListItem {
+  number: number;
+  title: string;
+  state: string;
+  merged_at: string | null;
+  merge_commit_sha: string | null;
+  html_url: string;
+  head: {
+    ref: string;
+    sha: string;
+    label?: string;
+    repo?: { full_name: string } | null;
+    user?: { login: string } | null;
+  };
+  base: {
+    ref: string;
+    sha: string;
+  };
+  user?: {
+    login?: string;
+    avatar_url?: string;
+  } | null;
+  updated_at: string;
+  created_at: string;
+}

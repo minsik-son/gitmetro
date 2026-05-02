@@ -42,7 +42,31 @@ export interface BranchLine {
   mergedIntoSha?: string;
   sourceSha?: string;
   pullNumber?: number;
+  pullTitle?: string;
+  pullUrl?: string;
 }
+
+export type GraphEdgeType =
+  | "commit"
+  | "branch"
+  | "merge"
+  | "synthetic-pr"
+  | "pr-branch-off"
+  | "pr-chain"
+  | "pr-merge-back";
+
+export interface GraphEdge {
+  id: string;
+  /** Visual node id or real sha. Renderer resolves via byNodeId then bySha. */
+  from: string;
+  /** Visual node id or real sha. Renderer resolves via byNodeId then bySha. */
+  to: string;
+  type: GraphEdgeType;
+  branchId?: string;
+  color?: string;
+}
+
+export type VisualNodeKind = "commit" | "pr-start" | "pr-end";
 
 export interface CommitNode {
   sha: string;
@@ -60,10 +84,22 @@ export interface CommitNode {
   isTag?: boolean;
   tag?: string;
   pr?: string;
+
+  /** Stable visual key. Required when the same real sha appears on multiple lanes. */
+  nodeId?: string;
+  /** Visual-only marker. Defaults to "commit" when omitted. */
+  visualKind?: VisualNodeKind;
+  /** True for synthetic PR start/end nodes generated from PR metadata. */
+  isVirtual?: boolean;
+  /** Original real sha when this visual node mirrors a real commit. */
+  realSha?: string;
+  /** Visual timeline override; takes precedence over `t` for layout. */
+  displayT?: number;
 }
 
 export interface GitMetroGraph {
   repo: RepositorySummary;
   branches: BranchLine[];
   commits: CommitNode[];
+  edges?: GraphEdge[];
 }

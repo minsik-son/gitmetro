@@ -77,6 +77,110 @@ describe("buildLayout edge cases", () => {
   });
 });
 
+describe("buildLayout displayT and byNodeId", () => {
+  it("uses displayT instead of t when computing position via posForCommit", () => {
+    const branches: BranchLine[] = [
+      { id: "main", name: "main", category: "main", lane: 0, color: "#fff" },
+    ];
+    const commits: CommitNode[] = [
+      {
+        sha: "A",
+        shortSha: "A",
+        branch: "main",
+        t: 0,
+        parents: [],
+        message: "",
+        author: "x",
+        date: "",
+        isMerge: false,
+      },
+      {
+        sha: "B",
+        shortSha: "B",
+        branch: "main",
+        t: 0,
+        displayT: 4,
+        parents: [],
+        message: "",
+        author: "x",
+        date: "",
+        isMerge: false,
+      },
+    ];
+    const layout = buildLayout(branches, commits, "horizontal");
+    const pA = layout.posForCommit(commits[0], 0);
+    const pB = layout.posForCommit(commits[1], 0);
+    expect(pA.x).toBe(PAD_X + 0 * STEP);
+    expect(pB.x).toBe(PAD_X + 4 * STEP);
+  });
+
+  it("computes tMax from displayT when present", () => {
+    const branches: BranchLine[] = [
+      { id: "main", name: "main", category: "main", lane: 0, color: "#fff" },
+    ];
+    const commits: CommitNode[] = [
+      {
+        sha: "A",
+        shortSha: "A",
+        branch: "main",
+        t: 1,
+        displayT: 7.5,
+        parents: [],
+        message: "",
+        author: "x",
+        date: "",
+        isMerge: false,
+      },
+    ];
+    const layout = buildLayout(branches, commits, "horizontal");
+    expect(layout.tMax).toBe(7.5);
+  });
+
+  it("indexes commits by both nodeId and sha in byNodeId", () => {
+    const branches: BranchLine[] = [
+      { id: "main", name: "main", category: "main", lane: 0, color: "#fff" },
+      {
+        id: "pr/9",
+        name: "pr/9",
+        category: "feature",
+        lane: -1,
+        color: "#0ff",
+        source: "pull-request",
+      },
+    ];
+    const commits: CommitNode[] = [
+      {
+        sha: "A",
+        shortSha: "A",
+        branch: "main",
+        t: 0,
+        parents: [],
+        message: "",
+        author: "x",
+        date: "",
+        isMerge: false,
+      },
+      {
+        sha: "VS",
+        nodeId: "virtual/pr/9/start",
+        shortSha: "vs",
+        branch: "pr/9",
+        t: 1,
+        parents: [],
+        message: "",
+        author: "x",
+        date: "",
+        isMerge: false,
+        isVirtual: true,
+        visualKind: "pr-start",
+      },
+    ];
+    const layout = buildLayout(branches, commits, "horizontal");
+    expect(layout.byNodeId["A"]).toBe(commits[0]);
+    expect(layout.byNodeId["virtual/pr/9/start"]).toBe(commits[1]);
+  });
+});
+
 describe("rectPath", () => {
   it("returns a non-empty SVG path string for horizontal", () => {
     const d = rectPath({ x: 0, y: 0 }, { x: 100, y: 50 }, "horizontal");

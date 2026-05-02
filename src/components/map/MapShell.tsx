@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { applyThemeToGraph } from "@/lib/graph/applyTheme";
 import { THEMES } from "@/lib/theme/themes";
+import { getVisualNodeId } from "@/lib/graph/visualNode";
 import type {
   CommitNode,
   GitMetroGraph,
@@ -18,12 +19,14 @@ import { CommitTooltip } from "./CommitTooltip";
 import { ZoomControls } from "./ZoomControls";
 import { MapLegend } from "./MapLegend";
 import type { NodeStyle } from "./Station";
+import type { GraphMeta } from "@/lib/github/api-types";
 
 interface Props {
   graph: GitMetroGraph;
   loadingStepMs?: number;
   skipInitialLoading?: boolean;
   truncated?: boolean;
+  meta?: GraphMeta;
 }
 
 export function MapShell({
@@ -31,6 +34,7 @@ export function MapShell({
   loadingStepMs,
   skipInitialLoading = false,
   truncated = false,
+  meta,
 }: Props) {
   const [phase, setPhase] = useState<"loading" | "map">(
     skipInitialLoading ? "map" : "loading",
@@ -62,21 +66,27 @@ export function MapShell({
     () => new Set(graph.branches.map((b) => b.id)),
   );
   const [showHistory, setShowHistory] = useState(true);
-  const [selectedSha, setSelectedSha] = useState<string | null>(null);
+  const [showPrHistory, setShowPrHistory] = useState(true);
+  const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [hover, setHover] = useState<HoverState | null>(null);
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
 
   const effectiveVisibleBranches = useMemo(() => {
-    if (showHistory) return visibleBranches;
+    if (showHistory && showPrHistory) return visibleBranches;
     const next = new Set<string>();
     visibleBranches.forEach((id) => {
       const branch = themedGraph.branches.find((b) => b.id === id);
-      if (branch?.isHistorical) return;
+      if (!branch) {
+        next.add(id);
+        return;
+      }
+      if (!showHistory && branch.source === "merge-history") return;
+      if (!showPrHistory && branch.source === "pull-request") return;
       next.add(id);
     });
     return next;
-  }, [visibleBranches, showHistory, themedGraph.branches]);
+  }, [visibleBranches, showHistory, showPrHistory, themedGraph.branches]);
 
   function toggleBranch(id: string) {
     setVisibleBranches((prev) => {
@@ -88,7 +98,7 @@ export function MapShell({
   }
 
   function handleSelect(commit: CommitNode) {
-    setSelectedSha(commit.sha);
+    setSelectedKey(getVisualNodeId(commit));
   }
 
   if (phase === "loading") {
@@ -101,8 +111,8 @@ export function MapShell({
     );
   }
 
-  const selectedCommit = selectedSha
-    ? themedGraph.commits.find((c) => c.sha === selectedSha) ?? null
+  const selectedCommit = selectedKey
+    ? themedGraph.commits.find((c) => getVisualNodeId(c) === selectedKey) ?? null
     : null;
 
   return (
@@ -114,6 +124,7 @@ export function MapShell({
         themeKey={themeKey}
         setThemeKey={setThemeKey}
         truncated={truncated}
+        meta={meta}
       />
       <div className="flex min-h-0 flex-1">
         <BranchFilterPanel
@@ -122,6 +133,8 @@ export function MapShell({
           toggle={toggleBranch}
           showHistory={showHistory}
           setShowHistory={setShowHistory}
+          showPrHistory={showPrHistory}
+          setShowPrHistory={setShowPrHistory}
         />
         <div className="relative min-w-0 flex-1">
           <MetroMapCanvas
@@ -130,7 +143,7 @@ export function MapShell({
             nodeStyle={nodeStyle}
             theme={theme}
             visibleBranches={effectiveVisibleBranches}
-            selectedSha={selectedSha}
+            selectedKey={selectedKey}
             onSelectCommit={handleSelect}
             onHoverChange={setHover}
             zoom={zoom}
@@ -138,7 +151,7 @@ export function MapShell({
             pan={pan}
             setPan={setPan}
             onClearSelection={() => {
-              setSelectedSha(null);
+              setSelectedKey(null);
               setHover(null);
             }}
           />
@@ -154,7 +167,7 @@ export function MapShell({
           <CommitInspector
             commit={selectedCommit}
             graph={themedGraph}
-            onSelectSha={setSelectedSha}
+            onSelectSha={setSelectedKey}
           />
         )}
       </div>

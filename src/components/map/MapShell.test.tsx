@@ -176,3 +176,124 @@ describe("MapShell history toggle", () => {
     expect(screen.getByTestId("station-S2")).toBeInTheDocument();
   });
 });
+
+const PR_GRAPH: GitMetroGraph = {
+  repo: { ...MOCK_GRAPH.repo },
+  branches: [
+    {
+      id: "main",
+      name: "main",
+      category: "main",
+      lane: 0,
+      color: "#ff5b5b",
+      isDefault: true,
+      headSha: "M2",
+      isActive: true,
+      source: "ref",
+    },
+    {
+      id: "pr/77",
+      name: "feature/wallet",
+      category: "feature",
+      lane: -1,
+      color: "#3ddbd9",
+      isHistorical: true,
+      source: "pull-request",
+      pullNumber: 77,
+      pullTitle: "Add wallet",
+      pullUrl: "https://github.com/x/y/pull/77",
+      isActive: true,
+    },
+  ],
+  commits: [
+    {
+      sha: "M1",
+      shortSha: "M1",
+      branch: "main",
+      t: 0,
+      parents: [],
+      message: "init",
+      author: "x",
+      date: "2026-01-01 00:00",
+      isMerge: false,
+    },
+    {
+      sha: "M2",
+      shortSha: "M2",
+      branch: "main",
+      t: 2,
+      parents: ["M1"],
+      message: "release",
+      author: "x",
+      date: "2026-01-04 00:00",
+      isMerge: false,
+      isHead: true,
+    },
+    {
+      sha: "P1",
+      shortSha: "P1",
+      branch: "pr/77",
+      t: 1,
+      parents: ["M1"],
+      message: "wallet step",
+      author: "x",
+      date: "2026-01-02 00:00",
+      isMerge: false,
+      pr: "#77",
+    },
+  ],
+  edges: [
+    {
+      id: "pr-edge/77",
+      from: "P1",
+      to: "M2",
+      type: "synthetic-pr",
+      branchId: "pr/77",
+    },
+  ],
+};
+
+describe("MapShell PR history toggle", () => {
+  beforeEach(() => {
+    cleanup();
+  });
+
+  it("renders Show PR history toggle when PR branches exist", () => {
+    render(<MapShell graph={PR_GRAPH} skipInitialLoading />);
+    expect(screen.getByTestId("show-pr-history-toggle")).toBeInTheDocument();
+  });
+
+  it("hides pull-request stations when the PR history toggle is turned off", () => {
+    render(<MapShell graph={PR_GRAPH} skipInitialLoading />);
+    expect(screen.getByTestId("station-P1")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId("show-pr-history-toggle"));
+    expect(screen.queryByTestId("station-P1")).not.toBeInTheDocument();
+    // Default branch stations stay visible.
+    expect(screen.getByTestId("station-M1")).toBeInTheDocument();
+    expect(screen.getByTestId("station-M2")).toBeInTheDocument();
+  });
+
+  it("brings pull-request stations back when the toggle is turned on again", () => {
+    render(<MapShell graph={PR_GRAPH} skipInitialLoading />);
+    const toggle = screen.getByTestId("show-pr-history-toggle");
+    fireEvent.click(toggle);
+    expect(screen.queryByTestId("station-P1")).not.toBeInTheDocument();
+    fireEvent.click(toggle);
+    expect(screen.getByTestId("station-P1")).toBeInTheDocument();
+  });
+
+  it("hides synthetic-pr edge when the PR history toggle is off", () => {
+    const { container } = render(
+      <MapShell graph={PR_GRAPH} skipInitialLoading />,
+    );
+    expect(
+      container.querySelector('[data-testid="synthetic-edge-pr-edge/77"]'),
+    ).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId("show-pr-history-toggle"));
+    expect(
+      container.querySelector('[data-testid="synthetic-edge-pr-edge/77"]'),
+    ).not.toBeInTheDocument();
+  });
+});
