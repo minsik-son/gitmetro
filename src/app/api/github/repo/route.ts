@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { fetchRepository } from "@/lib/github/fetchRepository";
 import { GitHubApiError } from "@/lib/github/errors";
 import { parseRepoInput } from "@/lib/github/parseRepoInput";
+import { readSessionFromRequest } from "@/lib/auth/session";
 
 export const dynamic = "force-dynamic";
 
@@ -21,8 +22,13 @@ export async function GET(req: Request) {
     );
   }
 
+  const session = readSessionFromRequest(req);
+  const token = session?.accessToken ?? null;
+
   try {
-    const result = await fetchRepository(parsed.value.owner, parsed.value.repo);
+    const result = await fetchRepository(parsed.value.owner, parsed.value.repo, {
+      token,
+    });
     return NextResponse.json({ ok: true, repo: result.repo });
   } catch (err) {
     if (err instanceof GitHubApiError) {

@@ -53,6 +53,33 @@ describe("githubFetch headers", () => {
     expect(headers.get("Authorization")).toBe("Bearer ghp_abc123");
   });
 
+  it("uses options.token when provided", async () => {
+    vi.stubEnv("GITHUB_TOKEN", "");
+    mockFetch.mockResolvedValueOnce(jsonResponse({ ok: true }));
+    await githubFetch("/repos/foo/bar", { token: "user-oauth" });
+    const init = mockFetch.mock.calls[0][1] as RequestInit;
+    const headers = new Headers(init.headers);
+    expect(headers.get("Authorization")).toBe("Bearer user-oauth");
+  });
+
+  it("prefers options.token over GITHUB_TOKEN", async () => {
+    vi.stubEnv("GITHUB_TOKEN", "ghp_env");
+    mockFetch.mockResolvedValueOnce(jsonResponse({ ok: true }));
+    await githubFetch("/repos/foo/bar", { token: "user-oauth" });
+    const init = mockFetch.mock.calls[0][1] as RequestInit;
+    const headers = new Headers(init.headers);
+    expect(headers.get("Authorization")).toBe("Bearer user-oauth");
+  });
+
+  it("falls back to GITHUB_TOKEN when options.token is null/undefined/empty", async () => {
+    vi.stubEnv("GITHUB_TOKEN", "ghp_env");
+    mockFetch.mockResolvedValueOnce(jsonResponse({ ok: true }));
+    await githubFetch("/repos/foo/bar", { token: null });
+    const init = mockFetch.mock.calls[0][1] as RequestInit;
+    const headers = new Headers(init.headers);
+    expect(headers.get("Authorization")).toBe("Bearer ghp_env");
+  });
+
   it("respects GITHUB_API_VERSION override", async () => {
     vi.stubEnv("GITHUB_API_VERSION", "2024-01-01");
     mockFetch.mockResolvedValueOnce(jsonResponse({ ok: true }));

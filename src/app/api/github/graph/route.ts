@@ -19,6 +19,8 @@ import {
   PR_CACHE_TTL_MS,
   getOrSetCached,
 } from "@/lib/cache/memoryCache";
+import { readSessionFromRequest } from "@/lib/auth/session";
+import type { GitMetroSession } from "@/lib/auth/types";
 import type {
   GitHubCommitListItem,
   RateLimitMeta,
@@ -86,10 +88,29 @@ function failureResponse(failure: GraphApiFailure, status?: number) {
   return NextResponse.json(failure, { status: status ?? failure.error.status ?? 500 });
 }
 
+function authScopeFor(session: GitMetroSession | null): string {
+  if (session) return `oauth:${session.login}`;
+  if (process.env.GITHUB_TOKEN) return "env";
+  return "none";
+}
+
+function authMetaFor(
+  session: GitMetroSession | null,
+): NonNullable<GraphApiSuccess["meta"]["auth"]> {
+  if (session) {
+    return { authenticated: true, source: "oauth", login: session.login };
+  }
+  if (process.env.GITHUB_TOKEN) {
+    return { authenticated: false, source: "env" };
+  }
+  return { authenticated: false, source: "none" };
+}
+
 function buildGraphCacheKey(
   owner: string,
   repo: string,
   o: GraphRouteOptions,
+  authScope: string,
 ): string {
   return [
     "github-graph",
@@ -106,6 +127,7 @@ function buildGraphCacheKey(
     `prListPages=${o.prListPages}`,
     `prTimelineMode=${o.prTimelineMode}`,
     `minPrVisualSpan=${o.minPrVisualSpan}`,
+    `auth=${authScope}`,
   ].join(":");
 }
 
@@ -197,11 +219,18 @@ export async function GET(req: Request) {
     ),
   };
 
-  const cacheKey = buildGraphCacheKey(parsed.value.owner, parsed.value.repo, options);
+  const session = readSessionFromRequest(req);
+  const authScope = authScopeFor(session);
+  const cacheKey = buildGraphCacheKey(
+    parsed.value.owner,
+    parsed.value.repo,
+    options,
+    authScope,
+  );
 
   try {
     const result = await getOrSetCached(cacheKey, GRAPH_CACHE_TTL_MS, () =>
-      buildGraphResponse(parsed.value.owner, parsed.value.repo, options),
+      buildGraphResponse(parsed.value.owner, parsed.value.repo, options, session),
     );
     if (!result.ok) {
       return failureResponse(result.failure, result.failure.error.status);
@@ -256,11 +285,13 @@ async function buildGraphResponse(
   owner: string,
   repo: string,
   options: GraphRouteOptions,
+  session: GitMetroSession | null,
 ): Promise<BuildGraphResult> {
-  const repoResult = await fetchRepository(owner, repo);
+  const token = session?.accessToken ?? null;
+  const repoResult = await fetchRepository(owner, repo, { token });
   const lastRateLimit: RateLimitMeta = repoResult.rateLimit;
 
-  const branchList = await fetchBranches(owner, repo);
+  const branchList = await fetchBranches(owner, repo, { token });
   if (branchList.length === 0) {
     return {
       ok: false,
@@ -291,12 +322,13 @@ async function buildGraphResponse(
     const remainingTotal = options.commitLimit - totalFetched;
     const list = await fetchCommits(owner, repo, branch.name, {
       limit: Math.min(options.branchCommitLimit, remainingTotal),
+      token,
     });
     commitsByBranch[branch.name] = list;
     totalFetched += list.length;
   }
 
-  const tagResult = await fetchTags(owner, repo);
+  const tagResult = await fetchTags(owner, repo, { token });
 
   const normalize = normalizeGitHubGraph({
     repo: repoResult.repo,
@@ -328,13 +360,14 @@ async function buildGraphResponse(
   if (options.includePrHistory && options.prHistoryLimit > 0) {
     try {
       const prList = await getOrSetCached(
-        `github-pr-list:${owner}/${repo}:base=${repoResult.repo.default_branch}:limit=${options.prHistoryLimit}:pages=${options.prListPages}`,
+        `github-pr-list:${owner}/${repo}:base=${repoResult.repo.default_branch}:limit=${options.prHistoryLimit}:pages=${options.prListPages}:auth=${session ? `oauth:${session.login}` : process.env.GITHUB_TOKEN ? "env" : "none"}`,
         PR_CACHE_TTL_MS,
         () =>
           fetchMergedPullRequests(owner, repo, {
             base: repoResult.repo.default_branch,
             limit: options.prHistoryLimit,
             maxPages: options.prListPages,
+            token,
           }),
       );
 
@@ -342,11 +375,12 @@ async function buildGraphResponse(
       for (const pull of prList) {
         try {
           const prCommits = await getOrSetCached(
-            `github-pr-commits:${owner}/${repo}:pull=${pull.number}:limit=${options.prCommitLimit}`,
+            `github-pr-commits:${owner}/${repo}:pull=${pull.number}:limit=${options.prCommitLimit}:auth=${session ? `oauth:${session.login}` : process.env.GITHUB_TOKEN ? "env" : "none"}`,
             PR_CACHE_TTL_MS,
             () =>
               fetchPullRequestCommits(owner, repo, pull.number, {
                 limit: options.prCommitLimit,
+                token,
               }),
           );
           commitsByPull[pull.number] = prCommits;
@@ -477,6 +511,7 @@ async function buildGraphResponse(
       history: normalize.meta.history,
       prHistory: prMeta,
       rateLimit: lastRateLimit,
+      auth: authMetaFor(session),
     },
   };
 

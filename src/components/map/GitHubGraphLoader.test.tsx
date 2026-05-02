@@ -106,7 +106,12 @@ describe("GitHubGraphLoader", () => {
     await waitFor(() =>
       expect(screen.getByTestId("metro-canvas")).toBeInTheDocument(),
     );
-    expect(mockFetch).toHaveBeenCalledTimes(2);
+    const graphCalls = mockFetch.mock.calls.filter(
+      (call) =>
+        typeof call[0] === "string" &&
+        (call[0] as string).includes("/api/github/graph"),
+    );
+    expect(graphCalls).toHaveLength(2);
   });
 
   it("treats a network error as github_unavailable", async () => {

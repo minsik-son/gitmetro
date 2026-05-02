@@ -6,6 +6,7 @@ import { BranchIcon, ExportIcon, GhIcon } from "@/components/ui/icons";
 import { OrientationToggle } from "./OrientationToggle";
 import { ThemeSelector } from "./ThemeSelector";
 import { GraphDiagnostics } from "./GraphDiagnostics";
+import { AuthStatus } from "@/components/auth/AuthStatus";
 import type { GraphMeta } from "@/lib/github/api-types";
 import type { MapOrientation, RepositorySummary, ThemeKey } from "@/types/gitmetro";
 
@@ -67,6 +68,7 @@ export function MapToolbar({
       )}
 
       <div className="ml-auto flex items-center gap-2">
+        <AuthStatus />
         {meta && <GraphDiagnostics meta={meta} />}
         <OrientationToggle value={orientation} onChange={setOrientation} />
         <ThemeSelector value={themeKey} onChange={setThemeKey} />

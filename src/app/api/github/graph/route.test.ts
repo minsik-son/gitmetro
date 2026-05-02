@@ -1,6 +1,9 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { GET } from "./route";
 import { clearCacheForTests } from "@/lib/cache/memoryCache";
+import { AUTH_COOKIE } from "@/lib/auth/config";
+import { encodeSession } from "@/lib/auth/session";
+import type { GitMetroSession } from "@/lib/auth/types";
 import type { GraphApiResponse } from "@/lib/github/api-types";
 import type {
   GitHubBranchListItem,
@@ -13,12 +16,15 @@ import type {
 const mockFetch = vi.fn();
 
 beforeEach(() => {
+  vi.unstubAllEnvs();
+  vi.stubEnv("AUTH_SECRET", "graph-route-secret-with-enough-entropy-bytes");
   mockFetch.mockReset();
   clearCacheForTests();
   vi.stubGlobal("fetch", mockFetch);
 });
 
 afterEach(() => {
+  vi.unstubAllEnvs();
   vi.unstubAllGlobals();
   clearCacheForTests();
 });
@@ -409,6 +415,91 @@ describe("GET /api/github/graph", () => {
       expect(body.meta.prHistory?.enabled).toBe(true);
       expect(body.meta.prHistory?.branches).toBe(0);
     }
+  });
+
+  it("forwards OAuth token from session cookie to GitHub fetch and reports auth meta", async () => {
+    const session: GitMetroSession = {
+      provider: "github",
+      accessToken: "ghs_user_oauth_token",
+      tokenType: "bearer",
+      scope: "read:user",
+      login: "octocat",
+      avatarUrl: "https://example.test/octocat.png",
+      name: "Octocat",
+      createdAt: 1714530000000,
+    };
+    const cookieValue = encodeURIComponent(encodeSession(session));
+    const repo = makeRepo();
+    mockFetch
+      .mockResolvedValueOnce(jsonResponse(repo))
+      .mockResolvedValueOnce(jsonResponse([makeBranch("main", "M1")]))
+      .mockResolvedValueOnce(
+        jsonResponse([makeCommit("M1", "2026-04-10T00:00:00Z")]),
+      )
+      .mockResolvedValueOnce(jsonResponse([]))
+      .mockResolvedValueOnce(jsonResponse([]));
+
+    const req = new Request(
+      "http://localhost/api/github/graph?owner=x&repo=y",
+      { headers: { cookie: `${AUTH_COOKIE}=${cookieValue}` } },
+    );
+    const res = await GET(req);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as GraphApiResponse;
+    expect(body.ok).toBe(true);
+    if (body.ok) {
+      expect(body.meta.auth?.authenticated).toBe(true);
+      expect(body.meta.auth?.source).toBe("oauth");
+      expect(body.meta.auth?.login).toBe("octocat");
+    }
+    // Each GitHub fetch should have been invoked with the OAuth token.
+    const calls = mockFetch.mock.calls;
+    for (const [, init] of calls) {
+      const headers = new Headers((init as RequestInit).headers);
+      expect(headers.get("Authorization")).toBe("Bearer ghs_user_oauth_token");
+    }
+  });
+
+  it("uses different cache scopes for different auth sources", async () => {
+    const repo = makeRepo();
+    // First (anonymous) request consumes the synthetic-graph mocks.
+    mockFetch
+      .mockResolvedValueOnce(jsonResponse(repo))
+      .mockResolvedValueOnce(jsonResponse([makeBranch("main", "M1")]))
+      .mockResolvedValueOnce(
+        jsonResponse([makeCommit("M1", "2026-04-10T00:00:00Z")]),
+      )
+      .mockResolvedValueOnce(jsonResponse([]))
+      .mockResolvedValueOnce(jsonResponse([]));
+    await GET(reqUrl("owner=x&repo=y"));
+    const callsAfterFirst = mockFetch.mock.calls.length;
+
+    // Second request with an OAuth session must NOT hit the anonymous cache.
+    const session: GitMetroSession = {
+      provider: "github",
+      accessToken: "ghs_token",
+      tokenType: "bearer",
+      scope: "read:user",
+      login: "octo",
+      avatarUrl: undefined,
+      name: null,
+      createdAt: 1,
+    };
+    const cookieValue = encodeURIComponent(encodeSession(session));
+    mockFetch
+      .mockResolvedValueOnce(jsonResponse(repo))
+      .mockResolvedValueOnce(jsonResponse([makeBranch("main", "M1")]))
+      .mockResolvedValueOnce(
+        jsonResponse([makeCommit("M1", "2026-04-10T00:00:00Z")]),
+      )
+      .mockResolvedValueOnce(jsonResponse([]))
+      .mockResolvedValueOnce(jsonResponse([]));
+    const req = new Request(
+      "http://localhost/api/github/graph?owner=x&repo=y",
+      { headers: { cookie: `${AUTH_COOKIE}=${cookieValue}` } },
+    );
+    await GET(req);
+    expect(mockFetch.mock.calls.length).toBeGreaterThan(callsAfterFirst);
   });
 
   it("hits the in-memory cache on a second identical request", async () => {

@@ -19,14 +19,14 @@ function readRateLimit(headers: Headers): RateLimitMeta {
   };
 }
 
-function buildHeaders(): HeadersInit {
+function buildHeaders(explicitToken?: string | null): HeadersInit {
   const apiVersion = process.env.GITHUB_API_VERSION || DEFAULT_API_VERSION;
   const headers: Record<string, string> = {
     Accept: "application/vnd.github+json",
     "X-GitHub-Api-Version": apiVersion,
     "User-Agent": "GitMetro",
   };
-  const token = process.env.GITHUB_TOKEN;
+  const token = explicitToken || process.env.GITHUB_TOKEN;
   if (token) {
     headers.Authorization = `Bearer ${token}`;
   }
@@ -62,13 +62,19 @@ function resetAtFromHeaders(headers: Headers): string | undefined {
   return new Date(epoch * 1000).toISOString();
 }
 
+export interface GithubFetchOptions {
+  /** When provided, used as the Authorization Bearer token for this request. */
+  token?: string | null;
+}
+
 export async function githubFetch<T>(
   path: string,
+  options: GithubFetchOptions = {},
 ): Promise<GithubFetchResult<T>> {
   const url = resolveUrl(path);
   let response: Response;
   try {
-    response = await fetch(url, { headers: buildHeaders() });
+    response = await fetch(url, { headers: buildHeaders(options.token) });
   } catch (err) {
     throw new GitHubApiError({
       code: "github_unavailable",

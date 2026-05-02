@@ -1,10 +1,10 @@
-import { githubFetch } from "./client";
+import { githubFetch, type GithubFetchOptions } from "./client";
 import type { GitHubPullRequestListItem } from "./types";
 
 const PER_PAGE = 100;
 const DEFAULT_MAX_PAGES = 2;
 
-export interface FetchMergedPullRequestsOptions {
+export interface FetchMergedPullRequestsOptions extends GithubFetchOptions {
   base: string;
   limit: number;
   maxPages?: number;
@@ -18,13 +18,14 @@ export async function fetchMergedPullRequests(
   const limit = Math.max(0, options.limit);
   if (limit === 0) return [];
   const maxPages = Math.max(1, options.maxPages ?? DEFAULT_MAX_PAGES);
+  const fetchOpts: GithubFetchOptions = { token: options.token };
   const collected: GitHubPullRequestListItem[] = [];
   for (let page = 1; page <= maxPages; page++) {
     const path =
       `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/pulls` +
       `?state=closed&base=${encodeURIComponent(options.base)}` +
       `&sort=updated&direction=desc&per_page=${PER_PAGE}&page=${page}`;
-    const { data } = await githubFetch<GitHubPullRequestListItem[]>(path);
+    const { data } = await githubFetch<GitHubPullRequestListItem[]>(path, fetchOpts);
     if (!Array.isArray(data) || data.length === 0) break;
     for (const pr of data) {
       if (pr.merged_at) {

@@ -34,6 +34,11 @@ export interface GraphMeta {
     remaining?: number;
     reset?: number;
   };
+  auth?: {
+    authenticated: boolean;
+    source: "oauth" | "env" | "none";
+    login?: string;
+  };
 }
 
 export interface GraphApiSuccess {

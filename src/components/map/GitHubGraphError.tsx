@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import type { GraphApiFailure } from "@/lib/github/api-types";
+import { GhIcon } from "@/components/ui/icons";
 
 interface Props {
   error: GraphApiFailure["error"];
@@ -15,10 +16,20 @@ const FRIENDLY: Record<GraphApiFailure["error"]["code"], string> = {
   not_found: "We couldn't find that repository on GitHub.",
   forbidden: "GitHub denied access. The repository may be private.",
   rate_limited:
-    "GitHub API rate limit reached. Try again later or set GITHUB_TOKEN.",
+    "GitHub API rate limit reached. Sign in to lift the limit, or try again later.",
   github_unavailable: "GitHub is temporarily unreachable.",
   empty_graph: "This repository has no branches or commits to render.",
   unknown: "Something went wrong while contacting GitHub.",
+};
+
+const SIGN_IN_HELPFUL: Record<GraphApiFailure["error"]["code"], boolean> = {
+  invalid_request: false,
+  not_found: false,
+  forbidden: true,
+  rate_limited: true,
+  github_unavailable: false,
+  empty_graph: false,
+  unknown: false,
 };
 
 export function GitHubGraphError({ error, owner, repo, onRetry }: Props) {
@@ -58,7 +69,7 @@ export function GitHubGraphError({ error, owner, repo, onRetry }: Props) {
             </pre>
           )}
 
-          <div className="mt-4 flex gap-2">
+          <div className="mt-4 flex flex-wrap gap-2">
             <button
               type="button"
               onClick={onRetry}
@@ -72,6 +83,17 @@ export function GitHubGraphError({ error, owner, repo, onRetry }: Props) {
             >
               Back to entry
             </Link>
+            {SIGN_IN_HELPFUL[error.code] && (
+              <a
+                href={`/api/auth/github/login?returnTo=${encodeURIComponent(
+                  `/map/${owner}/${repo}`,
+                )}`}
+                data-testid="graph-error-sign-in"
+                className="inline-flex items-center gap-1.5 rounded-md border border-line bg-panel-alt px-3 py-1.5 text-xs text-text transition hover:bg-panel"
+              >
+                <GhIcon /> Sign in with GitHub
+              </a>
+            )}
           </div>
         </div>
       </div>

@@ -1,9 +1,9 @@
-import { githubFetch } from "./client";
+import { githubFetch, type GithubFetchOptions } from "./client";
 import type { GitHubCommitListItem } from "./types";
 
 const PER_PAGE = 100;
 
-export interface FetchPullRequestCommitsOptions {
+export interface FetchPullRequestCommitsOptions extends GithubFetchOptions {
   limit: number;
 }
 
@@ -15,6 +15,7 @@ export async function fetchPullRequestCommits(
 ): Promise<GitHubCommitListItem[]> {
   const limit = Math.max(0, options.limit);
   if (limit === 0) return [];
+  const fetchOpts: GithubFetchOptions = { token: options.token };
   const collected: GitHubCommitListItem[] = [];
   let page = 1;
   while (collected.length < limit) {
@@ -23,7 +24,7 @@ export async function fetchPullRequestCommits(
     const path =
       `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/pulls/` +
       `${pullNumber}/commits?per_page=${perPage}&page=${page}`;
-    const { data } = await githubFetch<GitHubCommitListItem[]>(path);
+    const { data } = await githubFetch<GitHubCommitListItem[]>(path, fetchOpts);
     if (!Array.isArray(data) || data.length === 0) break;
     collected.push(...data);
     if (data.length < perPage) break;
