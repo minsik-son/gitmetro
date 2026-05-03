@@ -3,6 +3,8 @@
 import { useEffect, useState } from "react";
 import { GhIcon } from "@/components/ui/icons";
 import type { AuthUser } from "@/lib/auth/types";
+import type { GraphMeta } from "@/lib/github/api-types";
+import { AccountMenu } from "./AccountMenu";
 
 interface MeResponse {
   ok: boolean;
@@ -15,13 +17,40 @@ type State =
   | { status: "authenticated"; user: AuthUser }
   | { status: "anonymous" };
 
-export function AuthStatus() {
+export type AuthStatusVariant = "toolbar" | "entry";
+
+interface Props {
+  meta?: GraphMeta;
+  /** Internal path to return to after login. */
+  returnTo?: string;
+  /** Visual variant. Toolbar is the compact map-page UI; entry is the homepage panel. */
+  variant?: AuthStatusVariant;
+  /** Forwarded to AccountMenu. Defaults to true. */
+  showRefresh?: boolean;
+}
+
+const TOOLBAR_ANON_CLASS =
+  "inline-flex items-center gap-1.5 rounded-md border border-line bg-panel-alt px-2.5 py-1 text-xs text-muted transition hover:text-text";
+
+const ENTRY_ANON_CLASS =
+  "mt-3 inline-flex w-full items-center justify-center gap-2 rounded-md border border-line bg-panel px-4 py-2.5 text-sm font-medium text-text transition hover:bg-panel-alt";
+
+function buildLoginHref(returnTo?: string): string {
+  if (!returnTo) return "/api/auth/github/login";
+  return `/api/auth/github/login?returnTo=${encodeURIComponent(returnTo)}`;
+}
+
+export function AuthStatus({
+  meta,
+  returnTo,
+  variant = "toolbar",
+  showRefresh = true,
+}: Props = {}) {
   const [state, setState] = useState<State>({ status: "loading" });
 
   useEffect(() => {
     let cancelled = false;
-    const fetchFn =
-      typeof fetch === "function" ? fetch : null;
+    const fetchFn = typeof fetch === "function" ? fetch : null;
     if (!fetchFn) {
       setState({ status: "anonymous" });
       return;
@@ -58,42 +87,45 @@ export function AuthStatus() {
   }
 
   if (state.status === "authenticated") {
-    const { user } = state;
-    return (
-      <span
-        data-testid="auth-status-authenticated"
-        className="inline-flex items-center gap-2 rounded-md border border-line bg-panel-alt px-2 py-1 text-xs text-text"
-      >
-        {user.avatarUrl ? (
-          // Plain <img> is fine here — small avatar from GitHub CDN.
-          // eslint-disable-next-line @next/next/no-img-element
-          <img
-            src={user.avatarUrl}
-            alt=""
-            width={16}
-            height={16}
-            className="rounded-full"
-          />
-        ) : (
-          <GhIcon />
-        )}
-        <span className="font-mono">{user.login}</span>
-        <a
-          href="/api/auth/github/logout"
-          data-testid="auth-logout-link"
-          className="text-muted transition hover:text-text"
+    if (variant === "entry") {
+      return (
+        <div
+          data-testid="entry-authenticated-panel"
+          className="mt-3 flex w-full items-center justify-between gap-3 rounded-md border border-line bg-panel px-3 py-2"
         >
-          logout
-        </a>
+          <span className="min-w-0 truncate text-xs text-muted">
+            Signed in
+          </span>
+          <span data-testid="auth-status-authenticated">
+            <AccountMenu user={state.user} meta={meta} showRefresh={showRefresh} />
+          </span>
+        </div>
+      );
+    }
+    return (
+      <span data-testid="auth-status-authenticated">
+        <AccountMenu user={state.user} meta={meta} showRefresh={showRefresh} />
       </span>
     );
   }
 
+  // Anonymous
+  if (variant === "entry") {
+    return (
+      <a
+        href={buildLoginHref(returnTo)}
+        data-testid="auth-status-anonymous"
+        className={ENTRY_ANON_CLASS}
+      >
+        <GhIcon /> Sign in with GitHub
+      </a>
+    );
+  }
   return (
     <a
-      href="/api/auth/github/login"
+      href={buildLoginHref(returnTo)}
       data-testid="auth-status-anonymous"
-      className="inline-flex items-center gap-1.5 rounded-md border border-line bg-panel-alt px-2.5 py-1 text-xs text-muted transition hover:text-text"
+      className={TOOLBAR_ANON_CLASS}
     >
       <GhIcon /> Sign in
     </a>

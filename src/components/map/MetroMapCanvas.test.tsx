@@ -527,6 +527,68 @@ describe("MetroMapCanvas", () => {
       expect(screenAfter.y).toBeCloseTo(180, 5);
     });
 
+    it("auto-fit does not re-call setZoom/setPan when re-rendered with the same layout", () => {
+      // Mock prototype so the canvas div reports a non-zero rect, so the
+      // auto-fit effect path actually runs (instead of bailing on rect<50).
+      const origRect = HTMLDivElement.prototype.getBoundingClientRect;
+      HTMLDivElement.prototype.getBoundingClientRect = function () {
+        return {
+          left: 0,
+          top: 0,
+          width: 800,
+          height: 600,
+          right: 800,
+          bottom: 600,
+          x: 0,
+          y: 0,
+          toJSON: () => ({}),
+        } as DOMRect;
+      };
+      try {
+        const setZoom1 = vi.fn();
+        const setPan1 = vi.fn();
+        const baseProps = {
+          data: MOCK_GRAPH,
+          orientation: "horizontal" as const,
+          nodeStyle: "ring" as const,
+          theme: THEMES["gitmetro-dark"],
+          visibleBranches: new Set(MOCK_GRAPH.branches.map((b) => b.id)),
+          selectedKey: null,
+          onSelectCommit: vi.fn(),
+          onHoverChange: vi.fn(),
+          zoom: 1,
+          pan: { x: 0, y: 0 },
+          onClearSelection: vi.fn(),
+        };
+        const { rerender } = render(
+          <MetroMapCanvas
+            {...baseProps}
+            setZoom={setZoom1}
+            setPan={setPan1}
+          />,
+        );
+        // First mount triggered auto-fit once.
+        expect(setZoom1).toHaveBeenCalledTimes(1);
+        expect(setPan1).toHaveBeenCalledTimes(1);
+
+        // Re-render with NEW setter identities, simulating MapShell re-renders.
+        const setZoom2 = vi.fn();
+        const setPan2 = vi.fn();
+        rerender(
+          <MetroMapCanvas
+            {...baseProps}
+            setZoom={setZoom2}
+            setPan={setPan2}
+          />,
+        );
+        // The guard sees the same fit values and skips the redundant updates.
+        expect(setZoom2).not.toHaveBeenCalled();
+        expect(setPan2).not.toHaveBeenCalled();
+      } finally {
+        HTMLDivElement.prototype.getBoundingClientRect = origRect;
+      }
+    });
+
     it("does not call setZoom/setPan when zoom is already clamped at the boundary", () => {
       const { setZoom, setPan } = setup({
         zoom: 2,

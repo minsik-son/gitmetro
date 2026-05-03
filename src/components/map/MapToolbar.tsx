@@ -68,7 +68,7 @@ export function MapToolbar({
       )}
 
       <div className="ml-auto flex items-center gap-2">
-        <AuthStatus />
+        <AuthStatus meta={meta} returnTo={`/map/${repo.owner}/${repo.name}`} />
         {meta && <GraphDiagnostics meta={meta} />}
         <OrientationToggle value={orientation} onChange={setOrientation} />
         <ThemeSelector value={themeKey} onChange={setThemeKey} />

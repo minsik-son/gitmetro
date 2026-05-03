@@ -53,6 +53,21 @@ const CLICK_DRAG_THRESHOLD_PX = 5;
 const MIN_ZOOM = 0.25;
 const MAX_ZOOM = 2;
 const FIT_PADDING_PX = 56;
+const ZOOM_EPSILON = 0.001;
+const PAN_EPSILON = 0.5;
+
+function almostSameViewport(
+  currentZoom: number,
+  currentPan: { x: number; y: number },
+  nextZoom: number,
+  nextPan: { x: number; y: number },
+): boolean {
+  return (
+    Math.abs(currentZoom - nextZoom) < ZOOM_EPSILON &&
+    Math.abs(currentPan.x - nextPan.x) < PAN_EPSILON &&
+    Math.abs(currentPan.y - nextPan.y) < PAN_EPSILON
+  );
+}
 
 interface SyntheticEdgeStyle {
   dashArray?: string;
@@ -257,6 +272,11 @@ export function MetroMapCanvas({
       minZoom: MIN_ZOOM,
       maxZoom: MAX_ZOOM,
     });
+    if (
+      almostSameViewport(zoomRef.current, panRef.current, fit.zoom, fit.pan)
+    ) {
+      return;
+    }
     zoomRef.current = fit.zoom;
     panRef.current = fit.pan;
     setZoom(() => fit.zoom);

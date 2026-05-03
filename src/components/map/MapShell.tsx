@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { applyThemeToGraph } from "@/lib/graph/applyTheme";
 import { THEMES } from "@/lib/theme/themes";
 import { getVisualNodeId } from "@/lib/graph/visualNode";
@@ -72,6 +72,14 @@ export function MapShell({
   const [hover, setHover] = useState<HoverState | null>(null);
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
+
+  // Stable identity prevents MetroMapCanvas auto-fit useEffect from re-firing
+  // every MapShell render (which otherwise caused a "Maximum update depth"
+  // loop because the effect depends on setZoom and itself calls setZoom).
+  const updateZoom = useCallback(
+    (updater: (z: number) => number) => setZoom((z) => updater(z)),
+    [],
+  );
 
   const effectiveVisibleBranches = useMemo(() => {
     if (showHistory && showPrHistory) return visibleBranches;
@@ -148,7 +156,7 @@ export function MapShell({
             onSelectCommit={handleSelect}
             onHoverChange={setHover}
             zoom={zoom}
-            setZoom={(updater) => setZoom((z) => updater(z))}
+            setZoom={updateZoom}
             pan={pan}
             setPan={setPan}
             onClearSelection={() => {
@@ -157,11 +165,7 @@ export function MapShell({
             }}
           />
           {hover && <CommitTooltip hover={hover} />}
-          <ZoomControls
-            zoom={zoom}
-            setZoom={(updater) => setZoom((z) => updater(z))}
-            setPan={setPan}
-          />
+          <ZoomControls zoom={zoom} setZoom={updateZoom} setPan={setPan} />
           <MapLegend theme={theme} />
         </div>
         {selectedCommit && (

@@ -1,6 +1,6 @@
 import { EntryBackground } from "@/components/entry/EntryBackground";
 import { RepoInputForm } from "@/components/entry/RepoInputForm";
-import { GitHubSignInButton } from "@/components/entry/GitHubSignInButton";
+import { AuthStatus } from "@/components/auth/AuthStatus";
 import { Logo } from "@/components/ui/Logo";
 
 export default function EntryPage() {
@@ -16,7 +16,7 @@ export default function EntryPage() {
           Turn any GitHub repository into a readable metro map.
         </p>
         <RepoInputForm />
-        <GitHubSignInButton />
+        <AuthStatus variant="entry" returnTo="/" showRefresh={false} />
       </div>
     </main>
   );
